@@ -1155,7 +1155,7 @@ def extract_title_from_db(db_path: str) -> str:
                                     val = f_bytes[ino:ino + il]
                                     if ifn == 4 and not title:
                                         cand = val.decode('utf-8', 'ignore').strip()
-                                        if cand and not cand.startswith('{') and not cand.startswith('"'):
+                                        if cand and not cand.startswith('{') and not cand.startswith('"') and cand.lower() != 'checkpoint':
                                             title = cand.split('\n')[0].strip()
                                             break
                                     elif ifn == 19 and not prompt_fallback:
