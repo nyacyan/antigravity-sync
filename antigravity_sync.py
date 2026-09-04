@@ -1117,30 +1117,98 @@ def is_valid_main_conversation(db_path: str, tombstones: set) -> bool:
 
 
 def extract_title_from_db(db_path: str) -> str:
-    """Extracts the session title from conversation steps."""
+    """
+    Extracts the conversation title from steps table in a physical database.
+    Priority:
+      1. Step type 23 (Metadata step), Field 30 -> Subfield 4 (Generated concise title)
+      2. Step type 23 (Metadata step), Field 30 -> Subfield 19 (User prompt text)
+      3. Step type 14 / 1 (User Input step), Field 19 (User prompt text)
+    """
     title = None
+    prompt_fallback = None
     try:
         conn = sqlite3.connect(db_path, timeout=3)
         c = conn.cursor()
-        c.execute("SELECT step_payload FROM steps ORDER BY idx DESC")
-        for r in c.fetchall():
-            if not r[0]:
+        c.execute("SELECT step_type, step_payload FROM steps ORDER BY idx DESC")
+        for st, pl in c.fetchall():
+            if not pl:
                 continue
-            m = re.search(rb'\x22([\x04-\x60])([^\x00-\x1f]{3,60})H\x01', r[0])
-            if m:
-                title = m.group(2).decode('utf-8', 'ignore')
-                break
-        if not title:
-            c.execute("SELECT step_payload FROM steps WHERE step_type IN (14, 15) LIMIT 1")
-            r = c.fetchone()
-            if r and r[0]:
-                m = re.search(rb'\x9a\x01([\x01-\x60])([^\x00-\x1f]{2,50})', r[0])
-                if m:
-                    title = m.group(2).decode('utf-8', 'ignore')
+            if st == 23:
+                off = 0
+                while off < len(pl):
+                    t, no = read_varint(pl, off)
+                    if t is None: break
+                    w = t & 7
+                    fn = t >> 3
+                    if w == 2:
+                        l, no = read_varint(pl, no)
+                        f_bytes = pl[no:no + l]
+                        if fn == 30:
+                            in_off = 0
+                            while in_off < len(f_bytes):
+                                it, ino = read_varint(f_bytes, in_off)
+                                if it is None: break
+                                iw = it & 7
+                                ifn = it >> 3
+                                if iw == 2:
+                                    il, ino = read_varint(f_bytes, ino)
+                                    val = f_bytes[ino:ino + il]
+                                    if ifn == 4 and not title:
+                                        cand = val.decode('utf-8', 'ignore').strip()
+                                        if cand and not cand.startswith('{') and not cand.startswith('"'):
+                                            title = cand.split('\n')[0].strip()
+                                            break
+                                    elif ifn == 19 and not prompt_fallback:
+                                        p_raw = val.decode('utf-8', 'ignore').strip()
+                                        clean_p = re.sub(r'<[^>]+>', '', p_raw).strip()
+                                        if clean_p:
+                                            prompt_fallback = clean_p
+                                    in_off = ino + il
+                                elif iw == 0:
+                                    _, ino = read_varint(f_bytes, ino)
+                                    in_off = ino
+                                else:
+                                    in_off = ino + (8 if iw == 1 else 4)
+                        off = no + l
+                    elif w == 0:
+                        _, no = read_varint(pl, no)
+                        off = no
+                    else:
+                        off = no + (8 if w == 1 else 4)
+                if title:
+                    break
+            elif st in (14, 1) and not prompt_fallback:
+                off = 0
+                while off < len(pl):
+                    t, no = read_varint(pl, off)
+                    if t is None: break
+                    w = t & 7
+                    fn = t >> 3
+                    if w == 2:
+                        l, no = read_varint(pl, no)
+                        if fn == 19:
+                            val = pl[no:no + l].decode('utf-8', 'ignore').strip()
+                            clean_p = re.sub(r'<[^>]+>', '', val).strip()
+                            if clean_p:
+                                prompt_fallback = clean_p
+                        off = no + l
+                    elif w == 0:
+                        _, no = read_varint(pl, no)
+                        off = no
+                    else:
+                        off = no + (8 if w == 1 else 4)
         conn.close()
     except Exception:
         pass
-    return title or "Untitled"
+
+    if title:
+        return title
+    if prompt_fallback:
+        first_line = prompt_fallback.split('\n')[0].strip()
+        if len(first_line) > 50:
+            return first_line[:47] + "..."
+        return first_line
+    return "Untitled"
 
 
 def adopt_orphaned_dbs(verbose: bool = False) -> List[Dict[str, str]]:
