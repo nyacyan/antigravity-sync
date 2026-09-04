@@ -17,6 +17,7 @@
 
 | 痛点场景 | 产生根因 | AGY-Sync 解决方案 |
 | :--- | :--- | :--- |
+| **物理存储层割裂（缺失 Junction 目录链接）** | 2.0 读写 `~/.gemini/antigravity/`，IDE 读写 `~/.gemini/antigravity-ide/`。若底层不打通，两端根本找不到彼此的物理 SQLite 库与日志。 | `--link` 自动建立 NTFS Directory Junction 软链接（`mklink /J`，无需管理员权限），使 `conversations`、`brain`、`annotations` 零冗余物理级完全共享。 |
 | **会话沦为 "Outside of Project" 孤儿** | IDE 新建会话时只传递工作区目录，遗漏了 Protobuf 的 Field 18 (ProjectId)。 | `--adopt` 智能解析项目配置（全面支持直连及嵌套 `gitFolder` 结构），将 Field 18 精准固化入底层 `.db` 文件。 |
 | **在 IDE 点开会话后从项目列表消失** | IDE 的“读后覆写”机制：切出会话时若本地 `.db` 缺少 Field 18 或 URI 编码不一致，IDE 会将错误元数据写回全局索引。 | 物理固化 `c%3A` 规范 URI 编码与 Field 18 至物理 SQLite 与全局摘要。 |
 | **点开会话无限转圈 / 内容停在昨天 (Step Gap)** | 前端渲染历史记录严格按递增步数 (`idx = 0, 1, 2...`) 加载。若会话异常中断产生断层，加载器读空后**永久终止数据流**。 | `--heal-gaps` 扫描检测 `steps` 表不连续区间，从 Append-only 的 `transcript_full.jsonl` 日志中提取记录并构造合法 Protobuf 热缝合回填。 |
@@ -31,17 +32,24 @@
 flowchart TD
     subgraph "Antigravity 2.0 桌面端"
         A1["conversations.pb"] --> Arbiter
+        A2["~/.gemini/antigravity/"]
     end
 
     subgraph "Antigravity IDE / VS Code"
         B1["globalStorage / conversations.pb"] --> Arbiter
         B2["state.vscdb / SQLite"] --> Arbiter
+        B3["~/.gemini/antigravity-ide/"]
     end
 
-    subgraph "物理会话数据库与日志"
+    subgraph "共享物理存储 (Junction / Symlink)"
         C1["conversations/{uuid}.db (steps 表)"]
         C2["brain/{uuid}/.system_generated/logs/transcript_full.jsonl"]
     end
+
+    A2 ===|"原生直接读写"| C1
+    A2 ===|"原生直接读写"| C2
+    B3 -.->|"mklink /J (目录联接)"| C1
+    B3 -.->|"mklink /J (目录联接)"| C2
 
     subgraph "AGY-Sync 核心引擎"
         Arbiter["智能冲突仲裁器<br/>- 步数多者优先<br/>- 统一规范 c%3A<br/>- ProjectId Field 18"]
@@ -75,12 +83,24 @@ flowchart TD
 - 操作系统：Windows, macOS 或 Linux
 - 已安装 Google Antigravity 2.0 或 Antigravity IDE 插件
 
-### 获取项目
+### 安装与初始配置
+1. 克隆本仓库：
 ```bash
 git clone https://github.com/nyacyan/antigravity-sync.git
 cd antigravity-sync
 ```
-无需安装任何外部第三方依赖，全部采用 Python 标准库原生实现。
+
+2. **打通底层物理存储链接（关键前置步骤）**：
+Antigravity 2.0 (`~/.gemini/antigravity/`) 与 IDE (`~/.gemini/antigravity-ide/`) 原生采用隔离目录。在同步元数据摘要之前，必须先建立底层数据目录（`conversations`、`brain`、`annotations`）的物理共享链接，使两端能无障碍访问同一个 SQLite 数据库与流式日志：
+
+```bash
+# 自动建立 Windows NTFS 目录联接 (mklink /J) 或 Linux/macOS 软链接 (ln -s)
+python antigravity_sync.py --link
+```
+> [!NOTE]
+> 在 Windows 上此操作通过 `mklink /J` 执行，**完全不需要管理员权限**！若 `antigravity-ide` 下存在已有文件，脚本会自动安全合并迁移并备份原目录，绝不丢失任何数据。
+
+无需安装任何外部第三方依赖，全部采用 Python 3.8+ 标准库原生实现。
 
 ---
 
@@ -94,6 +114,7 @@ cd antigravity-sync
 | 命令行指令 | 功能描述 |
 | :--- | :--- |
 | `python antigravity_sync.py --sync` | 执行一次双向智能增量同步（数据无变化时不触发写盘） |
+| `python antigravity_sync.py --link` | 一键建立 2.0 与 IDE 共享物理存储目录链接 (Junction / Symlink) |
 | `python antigravity_sync.py --adopt` | 扫描物理 `.db` 会话文件，为孤儿会话精准补齐 ProjectId |
 | `python antigravity_sync.py --check-gaps` | 扫描检测所有会话物理数据库是否存在步数断层 |
 | `python antigravity_sync.py --heal-gaps` | 自动从 `transcript_full.jsonl` 日志中提取记录并热缝合修复断层 |

@@ -30,6 +30,7 @@ import re
 import time
 import json
 import shutil
+import subprocess
 import argparse
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
@@ -92,6 +93,140 @@ class PathConfig:
 
 # Default path configuration instance
 CONFIG = PathConfig()
+
+
+# ==============================================================================
+# Storage Layer Directory Linking (Junction / Symlink for Physical SQLite & Brain)
+# ==============================================================================
+
+def get_link_target(path: str) -> str:
+    """Returns normalized target path of a symlink or Windows directory junction."""
+    if not os.path.exists(path):
+        return ""
+    try:
+        target = os.readlink(path)
+        if target.startswith("\\\\?\\"):
+            target = target[4:]
+        return os.path.normpath(target)
+    except OSError:
+        return ""
+
+
+def is_dir_linked(path: str) -> bool:
+    """Checks whether a path is a directory junction or symlink."""
+    if not os.path.exists(path):
+        return False
+    try:
+        os.readlink(path)
+        return True
+    except OSError:
+        return False
+
+
+def check_directory_links(gemini_home: str) -> Dict[str, Dict[str, Any]]:
+    """
+    Checks junction / symlink status between antigravity/ and antigravity-ide/.
+    Folders checked: 'conversations', 'brain', 'annotations'.
+    """
+    src_base = os.path.join(gemini_home, "antigravity")
+    ide_base = os.path.join(gemini_home, "antigravity-ide")
+    folders = ["conversations", "brain", "annotations"]
+    results = {}
+
+    for folder in folders:
+        src_path = os.path.normpath(os.path.join(src_base, folder))
+        link_path = os.path.normpath(os.path.join(ide_base, folder))
+        linked = is_dir_linked(link_path)
+        target = get_link_target(link_path)
+        is_correct = (os.path.normcase(target) == os.path.normcase(src_path)) if linked else False
+        exists = os.path.exists(link_path)
+
+        results[folder] = {
+            "src_path": src_path,
+            "link_path": link_path,
+            "exists": exists,
+            "is_link": linked,
+            "target": target,
+            "is_correct": is_correct
+        }
+
+    return results
+
+
+def setup_directory_links(gemini_home: str, verbose: bool = True) -> bool:
+    """
+    Sets up Directory Junctions (Windows) or Symlinks (macOS/Linux) so Antigravity 2.0
+    and Antigravity IDE share the exact same physical storage for conversations, brain, and annotations.
+    """
+    src_base = os.path.join(gemini_home, "antigravity")
+    ide_base = os.path.join(gemini_home, "antigravity-ide")
+    folders = ["conversations", "brain", "annotations"]
+
+    os.makedirs(src_base, exist_ok=True)
+    os.makedirs(ide_base, exist_ok=True)
+
+    all_ok = True
+    if verbose:
+        print("\n" + "=" * 68)
+        print("  Configuring Shared Storage Links (2.0 <===> IDE)")
+        print("=" * 68)
+
+    for folder in folders:
+        src_path = os.path.normpath(os.path.join(src_base, folder))
+        link_path = os.path.normpath(os.path.join(ide_base, folder))
+
+        os.makedirs(src_path, exist_ok=True)
+
+        if os.path.exists(link_path):
+            if is_dir_linked(link_path):
+                target = get_link_target(link_path)
+                if os.path.normcase(target) == os.path.normcase(src_path):
+                    if verbose:
+                        print(f"  [OK] Already Linked: {folder} ===> {src_path}")
+                    continue
+                else:
+                    if verbose:
+                        print(f"  [Fix] Link target mismatch ({target}), recreating...")
+                    if sys.platform == "win32":
+                        subprocess.run(["cmd.exe", "/c", "rmdir", link_path], check=True)
+                    else:
+                        os.unlink(link_path)
+            else:
+                items = os.listdir(link_path)
+                if items:
+                    if verbose:
+                        print(f"  [Migrate] Found {len(items)} item(s) in {link_path}, merging to {src_path}...")
+                    for item in items:
+                        s_item = os.path.join(link_path, item)
+                        d_item = os.path.join(src_path, item)
+                        if not os.path.exists(d_item):
+                            shutil.move(s_item, d_item)
+                    backup_name = f"{link_path}_backup_{int(time.time())}"
+                    shutil.move(link_path, backup_name)
+                    if verbose:
+                        print(f"  [Backup] Preserved original folder at {backup_name}")
+                else:
+                    os.rmdir(link_path)
+
+        try:
+            if sys.platform == "win32":
+                cmd = ["cmd.exe", "/c", "mklink", "/J", link_path, src_path]
+                res = subprocess.run(cmd, capture_output=True, text=True)
+                if res.returncode != 0:
+                    raise RuntimeError(res.stderr.strip() or res.stdout.strip())
+            else:
+                os.symlink(src_path, link_path, target_is_directory=True)
+
+            if verbose:
+                print(f"  ✅ Created Link: {link_path} ===> {src_path}")
+        except Exception as e:
+            all_ok = False
+            if verbose:
+                print(f"  ❌ Failed to link {folder}: {e}")
+
+    if verbose:
+        print("=" * 68 + "\n")
+    return all_ok
 
 
 # ==============================================================================
@@ -912,6 +1047,13 @@ def smart_bidirectional_sync(verbose: bool = True, log_manual: bool = False) -> 
     adopted_items = adopt_orphaned_dbs(verbose=False)
     proj_map = load_projects_map()
 
+    # Check physical storage links
+    link_status = check_directory_links(CONFIG.gemini_home)
+    unlinked = [k for k, v in link_status.items() if not v["is_correct"]]
+    if unlinked and verbose:
+        print(f"⚠️ NOTICE: Shared storage folders {unlinked} are not linked between 2.0 and IDE.")
+        print(f"   Run 'python antigravity_sync.py --link' to share physical SQLite databases and logs.\n")
+
     # Load 2.0 summaries
     convs_20 = {}
     if os.path.exists(CONFIG.src_pb):
@@ -1271,6 +1413,7 @@ Examples:
     parser.add_argument("--heal-gaps", action="store_true", help="Hot-stitch and recover step gaps from logs")
     parser.add_argument("--delete", action="store_true", help="Open interactive session purge console")
     parser.add_argument("--backup", action="store_true", help="Force immediate snapshot backup")
+    parser.add_argument("--link", action="store_true", help="Setup shared storage links (Junction/Symlink) between 2.0 and IDE")
     parser.add_argument("--daemon", action="store_true", help="Run background daemon loop (EXPERIMENTAL: theoretically operational, but untested)")
     parser.add_argument("--interval", type=int, default=60, help="Daemon polling interval in seconds (default: 60)")
     parser.add_argument("--install-startup", action="store_true", help="Install Windows silent background startup")
@@ -1329,6 +1472,10 @@ Examples:
         print("✅ Snapshot backup completed!" if b_res else "ℹ️ Backup skipped.")
         return
 
+    if args.link:
+        setup_directory_links(CONFIG.gemini_home, verbose=True)
+        return
+
     if args.sync:
         smart_bidirectional_sync(verbose=True, log_manual=True)
         return
@@ -1350,9 +1497,14 @@ Examples:
             except Exception:
                 pass
 
+        links = check_directory_links(CONFIG.gemini_home)
+        linked_ok = sum(1 for v in links.values() if v["is_correct"])
+        links_status_str = f"[Active ({linked_ok}/3)]" if linked_ok == 3 else f"[{linked_ok}/3 Action Required: Run 7]"
+
         print(f"\n[Status Overview]")
         print(f"  • Registered Projects    : {len(set(proj_map.values()))} active project(s)")
         print(f"  • Active Conversations   : {conv_cnt} session(s)")
+        print(f"  • Shared Storage Links   : {links_status_str}")
         print(f"  • Startup Daemon         : {'[Installed]' if os.path.exists(CONFIG.vbs_path) else '[Not Installed]'}")
 
         print("\n[Operations]")
@@ -1362,12 +1514,13 @@ Examples:
         print("  4. [Check] Scan All Databases for Step Sequence Gaps")
         print("  5. [Heal] Hot-Stitch Step Gaps from Logs into SQLite")
         print("  6. [Backup] Force Immediate Data Snapshot Backup")
-        print("  7. [Startup] Install Silent Windows Auto-Startup Daemon")
-        print("  8. [Uninstall] Remove Auto-Startup Daemon")
+        print("  7. [Link] Setup Shared Storage Links (Junction / Symlink)")
+        print("  8. [Startup] Install Silent Windows Auto-Startup Daemon")
+        print("  9. [Uninstall] Remove Auto-Startup Daemon")
         print("  Q. Quit")
 
         try:
-            choice = input("\nSelect operation (1-8/Q): ").strip().upper()
+            choice = input("\nSelect operation (1-9/Q): ").strip().upper()
         except Exception:
             choice = "Q"
 
@@ -1400,9 +1553,12 @@ Examples:
             print("\n✅ Backup completed successfully!" if b_res else "\nℹ️ Backup skipped.")
             input("\nPress Enter to continue...")
         elif choice == "7":
-            install_startup()
+            setup_directory_links(CONFIG.gemini_home, verbose=True)
             input("\nPress Enter to continue...")
         elif choice == "8":
+            install_startup()
+            input("\nPress Enter to continue...")
+        elif choice == "9":
             uninstall_startup()
             input("\nPress Enter to continue...")
         else:

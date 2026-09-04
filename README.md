@@ -17,6 +17,7 @@ It resolves project affiliation discrepancies (fixing the notorious **"Outside o
 
 | Problem | Root Cause | AGY-Sync Solution |
 | :--- | :--- | :--- |
+| **Physical Storage Disconnect (Missing Junctions)** | Antigravity 2.0 reads/writes to `~/.gemini/antigravity/` while IDE reads/writes to `~/.gemini/antigravity-ide/`. Without directory linking, conversation SQLite DBs and streaming logs cannot be opened across applications. | `--link` automatically configures NTFS Directory Junctions (`mklink /J`, no admin required) or Symlinks (`ln -s`) linking `conversations`, `brain`, and `annotations` with 0 disk waste. |
 | **"Outside of Project" Orphan Sessions** | IDE fails to inject Antigravity `ProjectId` (Protobuf Field 18) when creating conversations. | `--adopt` parses project configs (supporting both direct and nested `gitFolder` structures) and injects Field 18 into physical `.db` files. |
 | **Sessions Disappear After Clicking** | IDE's "Read-and-Overwrite" mechanism rewrites metadata with mismatched URI encodings (`file:///c:/` vs `file:///c%3A/`). | Hardens `c%3A` canonical URI encoding and Field 18 permanently into physical SQLite `.db` and summary Protobufs. |
 | **Infinite Spinner / Truncated Chat (Step Gap)** | Antigravity aborts chat stream rendering when consecutive step indices (`idx=0,1,2...`) are interrupted. | `--heal-gaps` detects missing step ranges in the `steps` table and hot-stitches valid Protobuf payloads extracted from append-only `transcript_full.jsonl` logs. |
@@ -31,17 +32,24 @@ It resolves project affiliation discrepancies (fixing the notorious **"Outside o
 flowchart TD
     subgraph "Antigravity 2.0 Desktop"
         A1["conversations.pb"] --> Arbiter
+        A2["~/.gemini/antigravity/"]
     end
 
     subgraph "Antigravity IDE / VS Code"
         B1["globalStorage / conversations.pb"] --> Arbiter
         B2["state.vscdb / SQLite"] --> Arbiter
+        B3["~/.gemini/antigravity-ide/"]
     end
 
-    subgraph "Physical Conversation Databases"
+    subgraph "Shared Physical Storage (Junction / Symlink)"
         C1["conversations/{uuid}.db (steps table)"]
         C2["brain/{uuid}/.system_generated/logs/transcript_full.jsonl"]
     end
+
+    A2 ===|"Native Direct Storage"| C1
+    A2 ===|"Native Direct Storage"| C2
+    B3 -.->|"mklink /J (Directory Junction)"| C1
+    B3 -.->|"mklink /J (Directory Junction)"| C2
 
     subgraph "AGY-Sync Engine"
         Arbiter["Smart Conflict Arbiter<br/>- Step count priority<br/>- Canonical URI c%3A<br/>- ProjectId Field 18"]
@@ -75,14 +83,24 @@ flowchart TD
 - Operating System: Windows, macOS, or Linux
 - Google Antigravity 2.0 and/or Antigravity IDE extension
 
-### Installation
-Clone this repository:
+### Installation & Initial Setup
+1. Clone this repository:
 ```bash
 git clone https://github.com/nyacyan/antigravity-sync.git
 cd antigravity-sync
 ```
 
-No external Python dependencies are required — AGY-Sync relies exclusively on the standard library (`sqlite3`, `pathlib`, `argparse`, `dataclasses`, `shutil`, `ctypes`, etc.).
+2. **Setup Shared Storage Links (Prerequisite)**:
+Antigravity 2.0 (`~/.gemini/antigravity/`) and the IDE (`~/.gemini/antigravity-ide/`) operate with separate storage paths by default. Before synchronizing session summaries, their physical data folders (`conversations/`, `brain/`, `annotations/`) must be linked so both applications read and write the exact same SQLite `.db` databases and streaming logs:
+
+```bash
+# Automatically creates NTFS Directory Junctions (Windows) or Symlinks (macOS/Linux)
+python antigravity_sync.py --link
+```
+> [!NOTE]
+> On Windows, this creates NTFS Directory Junctions (`mklink /J`), which require **no administrator privileges**. Any existing files in `antigravity-ide` are safely merged and backed up automatically.
+
+No external Python dependencies are required — AGY-Sync relies exclusively on the standard library (`sqlite3`, `pathlib`, `argparse`, `dataclasses`, `shutil`, `ctypes`, `subprocess`, etc.).
 
 ---
 
@@ -98,6 +116,7 @@ No external Python dependencies are required — AGY-Sync relies exclusively on 
 | Option | Description |
 | :--- | :--- |
 | `python antigravity_sync.py --sync` | Run a one-shot incremental bi-directional synchronization (0-write if unchanged). |
+| `python antigravity_sync.py --link` | Setup shared storage links (Directory Junction / Symlink) between 2.0 and IDE. |
 | `python antigravity_sync.py --adopt` | Scan physical conversation `.db` files and inject missing `ProjectId` (Field 18). |
 | `python antigravity_sync.py --check-gaps` | Scan all physical databases to detect step index discontinuities. |
 | `python antigravity_sync.py --heal-gaps` | Automatically stitch and repair detected step gaps from `transcript_full.jsonl`. |
