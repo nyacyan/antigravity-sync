@@ -17,6 +17,9 @@ Key Features:
 - Rolling Hourly Backups (Strict retention of the latest N archives).
 - Headless Daemon mode with Windows silent VBS auto-startup.
 
+Platform Support: Tested and verified on Windows. macOS and Linux path support
+is architecturally implemented but has not been verified on live systems.
+
 Author: Antigravity (Google DeepMind)
 License: MIT
 """
@@ -1397,7 +1400,9 @@ def main():
         description="Antigravity 2.0 <-> IDE Bi-Directional Synchronization & Session Recovery Manager\n\n"
                     "RECOMMENDED USAGE: Strongly advised to execute manually while both Antigravity 2.0\n"
                     "and the IDE (VS Code) are completely closed. The automated background daemon is\n"
-                    "theoretically operational, but has not yet been exhaustively tested.",
+                    "theoretically operational, but has not yet been exhaustively tested.\n\n"
+                    "PLATFORM NOTICE: Developed and verified exclusively on Windows (Windows 10 / 11).\n"
+                    "macOS and Linux path support is architecturally implemented but untested.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

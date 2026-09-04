@@ -1,7 +1,7 @@
 # AGY-Sync: Antigravity & IDE Bi-Directional Synchronization & Session Recovery Manager
 
 [![Python](https://img.shields.io/badge/Python-3.8+-3776AB.svg?style=flat&logo=python&logoColor=white)](https://python.org)
-[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-brightgreen.svg)]()
+[![Platform](https://img.shields.io/badge/Platform-Windows%20(Tested)%20%7C%20macOS%20%26%20Linux%20(Untested)-orange.svg)]()
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Google Antigravity](https://img.shields.io/badge/Google-Antigravity%202.0%20%26%20IDE-4285F4.svg?style=flat&logo=google)]()
 
@@ -82,8 +82,13 @@ flowchart TD
 
 ### Prerequisites
 - Python 3.8+
-- Operating System: Windows, macOS, or Linux
+- Operating System: **Windows (Tested & Verified)**, macOS / Linux (Architecturally supported, but Untested)
 - Google Antigravity 2.0 and/or Antigravity IDE extension
+
+> [!WARNING]
+> **Platform Testing Notice**:
+> **This tool has been developed, battle-tested, and verified ONLY on Windows (Windows 11 / 10)**.
+> While the codebase includes theoretical path discovery and POSIX symlink logic for macOS and Linux (`~/.config`, `~/Library/Application Support`), **it has NOT been verified on actual macOS or Linux machines**. Non-Windows users should proceed with caution, backup their `~/.gemini` directory before running, and are warmly invited to test and submit PRs!
 
 ### Installation & Initial Setup
 1. Clone this repository:

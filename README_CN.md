@@ -1,7 +1,7 @@
 # AGY-Sync: Antigravity 2.0 与 IDE 双向智能同步与会话断层修复管理器
 
 [![Python](https://img.shields.io/badge/Python-3.8+-3776AB.svg?style=flat&logo=python&logoColor=white)](https://python.org)
-[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-brightgreen.svg)]()
+[![Platform](https://img.shields.io/badge/Platform-Windows%20(Tested)%20%7C%20macOS%20%26%20Linux%20(Untested)-orange.svg)]()
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Google Antigravity](https://img.shields.io/badge/Google-Antigravity%202.0%20%26%20IDE-4285F4.svg?style=flat&logo=google)]()
 
@@ -82,8 +82,13 @@ flowchart TD
 
 ### 环境要求
 - Python 3.8+
-- 操作系统：Windows, macOS 或 Linux
+- 操作系统：**Windows（已完整验证）**，macOS / Linux（理论架构支持，未经实测）
 - 已安装 Google Antigravity 2.0 或 Antigravity IDE 插件
+
+> [!WARNING]
+> **平台测试与验证声明**：
+> **本项目目前仅在 Windows 操作系统（Windows 10 / 11）上经过完整实测与生产验证**。
+> 尽管代码架构中已实现了 macOS 与 Linux 的标准路径自适应（`~/Library/Application Support`、`~/.config` 以及 POSIX 软链接逻辑），但**尚未在实际的 macOS 或 Linux 真机上进行过充分的场景验证**。非 Windows 用户在使用前请务必先备份自己的 `~/.gemini` 文件夹，非常欢迎 macOS/Linux 开发者进行测试并提交 Issue 或 PR 协助完善！
 
 ### 安装与初始配置
 1. 克隆本仓库：
