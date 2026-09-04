@@ -65,9 +65,11 @@ flowchart TD
 ```
 
 ### 1. Workspace (`folderUri`) vs Project Entity (`projectId`)
-- **Folder URI**: Stored in Protobuf **Field 1** and **Field 7** (e.g., `file:///c%3A/Workspace/MyProject`).
+- **Folder URI**: Stored in Protobuf **Field 1** and **Field 7** (e.g., `file:///c%3A/Workspace/MyProject` or `file:///Users/username/Workspace/MyProject`).
 - **Project Entity**: Stored in Protobuf **Field 18** (e.g., UUID `cdecd737-a6f5-4876-8f75-75b63aabab0b`).
-- **Sidebar Affiliation Rule**: Whether a conversation belongs to a project in the sidebar is **100% determined by Field 18**. Without Field 18, it is classified as `Outside of Project`.
+- **Sidebar Affiliation Rule**: Whether a conversation belongs to a project in the sidebar is **100% determined by Field 18**. Without Field 18, it is classified as `Outside of Project` on all platforms.
+- **Windows Drive Letter Colon Percent-Encoding Quirk**: On Windows, paths include a drive letter and colon (`C:`, `D:`, etc.). VS Code encodes the colon as `%3A` (`file:///c%3A/`), whereas desktop components in certain releases output unencoded `file:///c:/`. When these collide, VS Code's "read-and-overwrite" mechanism evicts the session from its project. AGY-Sync canonicalizes all Windows drive letters (`[a-zA-Z]`) to `%3A`.
+  *(Note: On macOS and Linux, paths are POSIX-compliant like `file:///Users/...` or `file:///home/...`, which have no drive letters or colons, so this specific percent-encoding divergence only affects Windows.)*
 
 ### 2. The Step Gap Phenomenon & Recovery Principle
 - Conversation history is stored in the `steps` table of `conversations/<uuid>.db`.

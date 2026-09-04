@@ -318,12 +318,16 @@ def patch_protobuf_uri_recursive(blob: bytes, target: str = 'c%3A') -> Tuple[byt
                             mod = True
                 except Exception:
                     pass
-                if target == 'c%3A' and b'file:///c:/' in p:
-                    p = p.replace(b'file:///c:/', b'file:///c%3A/')
-                    mod = True
-                elif target == 'c:' and b'file:///c%3A/' in p:
-                    p = p.replace(b'file:///c%3A/', b'file:///c:/')
-                    mod = True
+                if target == 'c%3A':
+                    new_p, n = re.subn(rb'file:///([a-zA-Z]):/', rb'file:///\1%3A/', p)
+                    if n > 0:
+                        p = new_p
+                        mod = True
+                elif target == 'c:':
+                    new_p, n = re.subn(rb'file:///([a-zA-Z])%3A/', rb'file:///\1:/', p)
+                    if n > 0:
+                        p = new_p
+                        mod = True
             out.extend(encode_varint(tag))
             out.extend(encode_varint(len(p)))
             out.extend(p)
@@ -395,8 +399,8 @@ def load_projects_map() -> Dict[str, str]:
                 for r in resources:
                     uri = r.get('folderUri') or r.get('gitFolder', {}).get('folderUri')
                     if uri:
-                        uri_clean = uri.replace('c%3A', 'c:')
-                        uri_encoded = uri.replace('c:', 'c%3A')
+                        uri_clean = re.sub(r'file:///([a-zA-Z])%3A/', r'file:///\1:/', uri)
+                        uri_encoded = re.sub(r'file:///([a-zA-Z]):/', r'file:///\1%3A/', uri)
                         proj_map[uri_clean.lower()] = pid
                         proj_map[uri_encoded.lower()] = pid
                         folder_name = os.path.basename(uri_clean.rstrip('/\\'))

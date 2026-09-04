@@ -65,9 +65,11 @@ flowchart TD
 ```
 
 ### 1. 工作区 (folderUri) 与项目实体 (projectId) 的本质区别
-- **工作区 (FolderUri)**：保存在 Protobuf 的 **Field 1** 和 **Field 7**（例如 `file:///c%3A/Workspace/MyProject`）。
+- **工作区 (FolderUri)**：保存在 Protobuf 的 **Field 1** 和 **Field 7**（例如 Windows 下的 `file:///c%3A/Workspace/MyProject` 或 macOS/Linux 下的 `file:///Users/username/Workspace/MyProject`）。
 - **项目实体 (ProjectId)**：保存在 Protobuf 的 **Field 18**（例如 UUID `cdecd737-a6f5-4876-8f75-75b63aabab0b`）。
-- **侧边栏归属铁律**：会话在侧边栏是否属于某个项目，**100% 仅由 Field 18 决定**。缺少 Field 18 会被无条件判定为 `Outside of Project`。
+- **侧边栏归属铁律**：会话在侧边栏是否属于某个项目，**100% 仅由 Field 18 决定**。缺少 Field 18 会在所有操作系统上被无条件判定为 `Outside of Project`（孤儿）。
+- **Windows 盘符冒号编码冲突 (`c:` vs `c%3A`)**：在 Windows 平台下，工作区路径携带盘符与冒号（如 `C:` 或 `D:`）。VS Code 的 URI 解析器遵循 RFC 3986 标准将盘符冒号转义为 `%3A`（即 `file:///c%3A/`），而部分版本的桌面客户端在写入时保留了原始冒号 `file:///c:/`。当编码不一致时，VS Code 切出会话保存时会误判并踢出项目。AGY-Sync 会自动将 Windows 全盘符（`[a-zA-Z]`）统一规范化为 `%3A`。
+  *（注：macOS 和 Linux 采用 POSIX 路径格式如 `file:///Users/...` 或 `file:///home/...`，不包含盘符与冒号，因此该编码冲突纯属 Windows 平台的特有现象；但 Field 18 项目丢失、断层死锁与双端存储割裂则是全平台共通的痛点。）*
 
 ### 2. 步骤断层 (Step Gap) 产生机理与拯救机制
 - 会话步骤记录在 `conversations/<uuid>.db` 的 `steps` 表中。
