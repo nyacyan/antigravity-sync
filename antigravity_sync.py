@@ -77,6 +77,7 @@ class PathConfig:
             self.ide_db_path = os.path.join(user_home, "Library", "Application Support", "Antigravity IDE", "User", "globalStorage", "state.vscdb")
         else:
             self.ide_db_path = os.path.join(user_home, ".config", "Antigravity IDE", "User", "globalStorage", "state.vscdb")
+        self.ide_storage_dir = ide_storage_dir or os.path.dirname(self.ide_db_path)
 
         # 5. Conversations, brain logs, projects, and backups
         self.conv_dir = os.path.join(self.gemini_home, "antigravity", "conversations")
@@ -1598,10 +1599,7 @@ def audit_backup_diff(backup_dir: str) -> Tuple[Dict[str, Any], Dict[str, Any], 
     if os.path.exists(CONFIG.src_pb):
         try:
             with open(CONFIG.src_pb, 'rb') as f:
-                for s in parse_summaries_from_pb(f.read()):
-                    u = s.get("uuid")
-                    if u:
-                        active_map[u] = s
+                active_map = parse_summaries_from_pb(f.read())
         except Exception:
             pass
 
@@ -1612,10 +1610,7 @@ def audit_backup_diff(backup_dir: str) -> Tuple[Dict[str, Any], Dict[str, Any], 
     if os.path.exists(b_pb):
         try:
             with open(b_pb, 'rb') as f:
-                for s in parse_summaries_from_pb(f.read()):
-                    u = s.get("uuid")
-                    if u:
-                        backup_map[u] = s
+                backup_map = parse_summaries_from_pb(f.read())
         except Exception:
             pass
 
@@ -1623,18 +1618,20 @@ def audit_backup_diff(backup_dir: str) -> Tuple[Dict[str, Any], Dict[str, Any], 
     step_regressions = []
 
     for u, cur_s in active_map.items():
-        cur_steps = cur_s.get("step_count", 0)
-        title = cur_s.get("title", u[:8])
+        cur_meta = extract_summary_meta(cur_s)
+        cur_steps = cur_meta['steps']
+        title = cur_meta['title']
         if u not in backup_map:
             missing_in_backup.append({
                 "uuid": u,
                 "title": title,
                 "active_steps": cur_steps,
-                "active_mtime": cur_s.get("active_time_s", 0)
+                "active_mtime": cur_meta['ts']
             })
         else:
             b_s = backup_map[u]
-            b_steps = b_s.get("step_count", 0)
+            b_meta = extract_summary_meta(b_s)
+            b_steps = b_meta['steps']
             if cur_steps > b_steps:
                 step_regressions.append({
                     "uuid": u,
@@ -1738,23 +1735,35 @@ def restore_from_backup(backup_dir: Optional[str] = None, mode: str = "merge", v
             print("\nApplying Safe Merge Restore (keeping highest step count & latest timestamps)...")
 
         b_src_pb = os.path.join(backup_dir, "agyhub_summaries_proto.pb")
+        if not os.path.exists(b_src_pb):
+            b_src_pb = os.path.join(backup_dir, "ide_pb.pb")
         if os.path.exists(b_src_pb):
             with open(b_src_pb, 'rb') as f:
-                b_raw = f.read()
-            b_summaries = parse_summaries_from_pb(b_raw)
-            for s in b_summaries:
-                u = s.get("uuid")
-                if not u:
-                    continue
+                b_summaries = parse_summaries_from_pb(f.read())
+            for u, s in b_summaries.items():
                 if u not in active_map:
                     active_map[u] = s
                 else:
                     cur = active_map[u]
-                    if s.get("step_count", 0) > cur.get("step_count", 0):
-                        active_map[u]["step_count"] = s["step_count"]
-                    if s.get("active_time_s", 0) > cur.get("active_time_s", 0):
-                        active_map[u]["active_time_s"] = s["active_time_s"]
-                        active_map[u]["title"] = s.get("title", cur.get("title"))
+                    b_meta = extract_summary_meta(s)
+                    c_meta = extract_summary_meta(cur)
+                    if b_meta['steps'] > c_meta['steps'] or (b_meta['steps'] == c_meta['steps'] and b_meta['ts'] > c_meta['ts']):
+                        active_map[u] = s
+
+            # Serialize merged active_map back to src_pb
+            sorted_uuids = sorted(
+                active_map.keys(),
+                key=lambda k: extract_summary_meta(active_map[k])['ts'],
+                reverse=True
+            )
+            merged_pb = bytearray()
+            for u in sorted_uuids:
+                s_bytes = active_map[u]
+                inner = encode_tlv(1, 2, u.encode('ascii')) + encode_tlv(2, 2, s_bytes)
+                merged_pb.extend(encode_tlv(1, 2, inner))
+
+            with open(CONFIG.src_pb, 'wb') as f:
+                f.write(merged_pb)
 
         smart_bidirectional_sync(verbose=verbose, log_manual=True)
         if verbose:
@@ -2139,6 +2148,7 @@ Examples:
         print("  Antigravity 2.0 <-> IDE Session Synchronization Console")
         print("  * NOTICE: Recommended to run while 2.0 & IDE are closed.")
         print("  * Daemon mode is theoretically operational, but untested.")
+        print("  * REMINDER: In manual mode, periodically create backups (Option 8 / --backup)!")
         print("=" * 68)
 
         proj_map = load_projects_map()

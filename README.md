@@ -137,9 +137,9 @@ No external Python dependencies are required — AGY-Sync relies exclusively on 
 ## 💻 Usage
 
 > [!IMPORTANT]
-> **Recommended Usage Pattern**:
-> It is **strongly recommended to execute this tool manually while both Antigravity 2.0 and the IDE (VS Code) are completely closed** (e.g., exit applications and run `python antigravity_sync.py --sync`).
-> While the continuous background daemon and Windows startup scripts (`--daemon` / `--install-startup`) are theoretically designed to run automatically in the background, they have **not yet been exhaustively field-tested** across complex concurrent write scenarios. For maximum database safety and consistency, manual execution when both applications are closed is the recommended approach.
+> **Recommended Usage Pattern & Periodic Backup Reminder**:
+> 1. **Manual Execution Preferred**: It is **strongly recommended to execute this tool manually while both Antigravity 2.0 and the IDE (VS Code) are completely closed** (e.g., exit applications and run `python antigravity_sync.py --sync`). While the continuous background daemon and Windows startup scripts (`--daemon` / `--install-startup`) are theoretically designed to run automatically, they have not yet been exhaustively field-tested across complex concurrent write scenarios.
+> 2. **Periodic Manual Backup Reminder**: The automated hourly rolling backup manager runs only when the background daemon is active. If you use the recommended **manual execution mode**, automatic hourly backups will NOT fire in the background. **Please remember to periodically create manual snapshot backups** (via `python antigravity_sync.py --backup` or Option 8 in the console) before or after major sync operations!
 
 ### Command Line Flags
 
@@ -206,6 +206,7 @@ python antigravity_sync.py
   Antigravity 2.0 <-> IDE Session Synchronization Console
   * NOTICE: Recommended to run while 2.0 & IDE are closed.
   * Daemon mode is theoretically operational, but untested.
+  * REMINDER: In manual mode, periodically create backups (Option 8 / --backup)!
 ====================================================================
 
 [Status Overview]
