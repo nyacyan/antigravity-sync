@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Antigravity & VS Code local databases & configs
+*.db
+*.db-wal
+*.db-shm
+*.pb
+*.vscdb
+*.vscdb.backup
+*.log
+
+# Personal & local scripts / archives
+local_scripts/
+archive/
+backups/
+scratch/
+*.code-workspace
+gemini.md
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
