@@ -90,22 +90,33 @@ flowchart TD
 > **This tool has been developed, battle-tested, and verified ONLY on Windows (Windows 11 / 10)**.
 > While the codebase includes theoretical path discovery and POSIX symlink logic for macOS and Linux (`~/.config`, `~/Library/Application Support`), **it has NOT been verified on actual macOS or Linux machines**. Non-Windows users should proceed with caution, backup their `~/.gemini` directory before running, and are warmly invited to test and submit PRs!
 
-### Installation & Initial Setup
+### Installation & First-Time Setup
+
 1. Clone this repository:
 ```bash
 git clone https://github.com/nyacyan/antigravity-sync.git
 cd antigravity-sync
 ```
 
-2. **Setup Shared Storage Links (Prerequisite)**:
-Antigravity 2.0 (`~/.gemini/antigravity/`) and the IDE (`~/.gemini/antigravity-ide/`) operate with separate storage paths by default. Before synchronizing session summaries, their physical data folders (`conversations/`, `brain/`, `annotations/`) must be linked so both applications read and write the exact same SQLite `.db` databases and streaming logs:
+2. **First-Time Zero-Loss Initialization Wizard (`--init`) (Recommended for All New Users)**:
 
+If you have already been using Antigravity 2.0 and/or Antigravity IDE, both applications have stored conversations, streaming logs, and artifacts in separate directories (`~/.gemini/antigravity/` and `~/.gemini/antigravity-ide/`). 
+
+Run the First-Time Initialization Wizard to safely fuse everything with **zero data loss**:
 ```bash
-# Automatically creates NTFS Directory Junctions (Windows) or Symlinks (macOS/Linux)
-python antigravity_sync.py --link
+python antigravity_sync.py --init
 ```
-> [!NOTE]
-> On Windows, this creates NTFS Directory Junctions (`mklink /J`), which require **no administrator privileges**. Any existing files in `antigravity-ide` are safely merged and backed up automatically.
+
+The wizard automatically performs a 4-stage pipeline:
+1. **Intelligent Storage Fusion & Junction Setup**:
+   - Compares conversation databases by step count (`count(*)`, `max(idx)`) and modification time — superior versions are preserved, unique IDE sessions are migrated, and automatic `.pre_merge_20.bak` backups are made.
+   - Deep-merges `brain/` directories: preserves the longest `transcript_full.jsonl` and merges all non-transcript artifacts.
+   - Merges `annotations/`.
+   - Archives original IDE folders to `*_migrated_backup_<timestamp>`.
+   - Establishes NTFS Directory Junctions (`mklink /J`, Windows) or POSIX Symlinks (macOS/Linux) — **no administrator privileges required**.
+2. **Orphan Database Adoption**: Scans and injects `ProjectId` (Field 18) into newly unified physical databases.
+3. **Step Gap Auto-Healing**: Rescues any interrupted sessions by stitching missing steps from stream logs.
+4. **Bi-Directional Metadata Sync**: Aligns summaries across 2.0, IDE background Protobuf, and IDE `state.vscdb`.
 
 No external Python dependencies are required — AGY-Sync relies exclusively on the standard library (`sqlite3`, `pathlib`, `argparse`, `dataclasses`, `shutil`, `ctypes`, `subprocess`, etc.).
 
@@ -122,6 +133,7 @@ No external Python dependencies are required — AGY-Sync relies exclusively on 
 
 | Option | Description |
 | :--- | :--- |
+| `python antigravity_sync.py --init` | **First-Time Zero-Loss Setup Wizard**: Fuses physical storage, adopts orphans, heals gaps, and syncs summaries. |
 | `python antigravity_sync.py --sync` | Run a one-shot incremental bi-directional synchronization (0-write if unchanged). |
 | `python antigravity_sync.py --link` | Setup shared storage links (Directory Junction / Symlink) between 2.0 and IDE. |
 | `python antigravity_sync.py --adopt` | Scan physical conversation `.db` files and inject missing `ProjectId` (Field 18). |

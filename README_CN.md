@@ -90,22 +90,33 @@ flowchart TD
 > **本项目目前仅在 Windows 操作系统（Windows 10 / 11）上经过完整实测与生产验证**。
 > 尽管代码架构中已实现了 macOS 与 Linux 的标准路径自适应（`~/Library/Application Support`、`~/.config` 以及 POSIX 软链接逻辑），但**尚未在实际的 macOS 或 Linux 真机上进行过充分的场景验证**。非 Windows 用户在使用前请务必先备份自己的 `~/.gemini` 文件夹，非常欢迎 macOS/Linux 开发者进行测试并提交 Issue 或 PR 协助完善！
 
-### 安装与初始配置
+### 安装与首次使用
+
 1. 克隆本仓库：
 ```bash
 git clone https://github.com/nyacyan/antigravity-sync.git
 cd antigravity-sync
 ```
 
-2. **打通底层物理存储链接（关键前置步骤）**：
-Antigravity 2.0 (`~/.gemini/antigravity/`) 与 IDE (`~/.gemini/antigravity-ide/`) 原生采用隔离目录。在同步元数据摘要之前，必须先建立底层数据目录（`conversations`、`brain`、`annotations`）的物理共享链接，使两端能无障碍访问同一个 SQLite 数据库与流式日志：
+2. **首次运行一键初始化向导 (`--init`)（强烈推荐所有新用户首先执行）**：
 
+如果您此前已经使用过 Antigravity 2.0 和/或 Antigravity IDE，两端各自保存了分散的历史会话、流式日志和任务文件（分别位于 `~/.gemini/antigravity/` 与 `~/.gemini/antigravity-ide/`）。
+
+运行首次初始化向导，即可实现**零数据丢失**的智能双向数据大融合：
 ```bash
-# 自动建立 Windows NTFS 目录联接 (mklink /J) 或 Linux/macOS 软链接 (ln -s)
-python antigravity_sync.py --link
+python antigravity_sync.py --init
 ```
-> [!NOTE]
-> 在 Windows 上此操作通过 `mklink /J` 执行，**完全不需要管理员权限**！若 `antigravity-ide` 下存在已有文件，脚本会自动安全合并迁移并备份原目录，绝不丢失任何数据。
+
+向导将自动按序执行 4 大关键阶段：
+1. **物理存储智能双向融合与软链接建立**：
+   - 智能比对同名数据库步数（`count(*)`, `max(idx)`）与时间戳：优先保留步数更完整的一端，自动迁移 IDE 专属会话，并在替换 2.0 文件前自动生成 `.pre_merge_20.bak` 备份；
+   - 深度合并 `brain/` 目录：自动比对保留最长的 `transcript_full.jsonl` 日志，并无损合并两端所有的任务计划与过程产物；
+   - 无损合并 `annotations/` 目录；
+   - 自动将原始 IDE 目录备份为 `*_migrated_backup_<timestamp>`；
+   - 建立 Windows NTFS 目录联接 (`mklink /J`) 或 POSIX 软链接（**无需管理员权限**）。
+2. **物理孤儿数据库清洗认领**：自动扫描并为所有物理 `.db` 注入 Field 18 `ProjectId`，确保侧边栏正确归属项目。
+3. **历史步骤断层扫描与自愈**：从流式日志中热缝合因崩溃中断的历史步骤，彻底消灭前端无限加载卡死。
+4. **双向元数据增量对齐**：精准同步 2.0 Protobuf、IDE 后台 Protobuf 与 IDE 前端 `state.vscdb`。
 
 无需安装任何外部第三方依赖，全部采用 Python 3.8+ 标准库原生实现。
 
@@ -120,6 +131,7 @@ python antigravity_sync.py --link
 
 | 命令行指令 | 功能描述 |
 | :--- | :--- |
+| `python antigravity_sync.py --init` | **首次使用一键初始化向导**：自动双向融合底层物理存储、清洗孤儿、缝合断层并同步摘要。 |
 | `python antigravity_sync.py --sync` | 执行一次双向智能增量同步（数据无变化时不触发写盘） |
 | `python antigravity_sync.py --link` | 一键建立 2.0 与 IDE 共享物理存储目录链接 (Junction / Symlink) |
 | `python antigravity_sync.py --adopt` | 扫描物理 `.db` 会话文件，为孤儿会话精准补齐 ProjectId |

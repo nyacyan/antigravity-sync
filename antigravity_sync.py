@@ -156,80 +156,216 @@ def check_directory_links(gemini_home: str) -> Dict[str, Dict[str, Any]]:
     return results
 
 
-def setup_directory_links(gemini_home: str, verbose: bool = True) -> bool:
+def get_db_step_metrics(db_path: str) -> Tuple[int, int, float]:
+    """Returns (step_count, max_idx, mtime) from a conversation database."""
+    try:
+        conn = sqlite3.connect(db_path, timeout=2)
+        c = conn.cursor()
+        c.execute("SELECT count(*), max(idx) FROM steps")
+        row = c.fetchone()
+        cnt = row[0] if row else 0
+        ma = row[1] if row and row[1] is not None else -1
+        conn.close()
+        mtime = os.path.getmtime(db_path)
+        return cnt, ma, mtime
+    except Exception:
+        return 0, -1, 0.0
+
+
+def fuse_and_link_storage(gemini_home: str, verbose: bool = True) -> Dict[str, Any]:
     """
-    Sets up Directory Junctions (Windows) or Symlinks (macOS/Linux) so Antigravity 2.0
-    and Antigravity IDE share the exact same physical storage for conversations, brain, and annotations.
+    Executes an intelligent, non-destructive two-way fusion of physical storage
+    between Antigravity 2.0 and Antigravity IDE, then establishes Directory Junctions.
+    Arbitrates conflicts by step count and preserves all history.
     """
-    src_base = os.path.join(gemini_home, "antigravity")
-    ide_base = os.path.join(gemini_home, "antigravity-ide")
-    folders = ["conversations", "brain", "annotations"]
+    src_base = os.path.normpath(os.path.join(gemini_home, "antigravity"))
+    ide_base = os.path.normpath(os.path.join(gemini_home, "antigravity-ide"))
 
     os.makedirs(src_base, exist_ok=True)
     os.makedirs(ide_base, exist_ok=True)
 
-    all_ok = True
+    timestamp = int(time.time())
+    report = {
+        "already_linked": False,
+        "dbs_migrated_from_ide": 0,
+        "dbs_conflict_ide_preferred": 0,
+        "dbs_conflict_20_kept": 0,
+        "brains_migrated_from_ide": 0,
+        "brains_merged": 0,
+        "links_created": []
+    }
+
+    folders = ["conversations", "brain", "annotations"]
+
+    # Check if already fully linked
+    all_linked = True
+    for f in folders:
+        link_path = os.path.join(ide_base, f)
+        target = get_link_target(link_path)
+        src_path = os.path.join(src_base, f)
+        if not (is_dir_linked(link_path) and os.path.normcase(target) == os.path.normcase(src_path)):
+            all_linked = False
+            break
+
+    if all_linked:
+        report["already_linked"] = True
+        if verbose:
+            print("\n✅ Shared storage is already fully linked (conversations, brain, annotations).")
+        return report
+
     if verbose:
-        print("\n" + "=" * 68)
-        print("  Configuring Shared Storage Links (2.0 <===> IDE)")
-        print("=" * 68)
+        print("\n" + "=" * 70)
+        print("  Starting Intelligent Two-Way Storage Fusion (2.0 <===> IDE)")
+        print("=" * 70)
+
+    # 1. Fuse conversations/*.db
+    src_conv = os.path.join(src_base, "conversations")
+    ide_conv = os.path.join(ide_base, "conversations")
+    os.makedirs(src_conv, exist_ok=True)
+
+    if os.path.exists(ide_conv) and not is_dir_linked(ide_conv):
+        ide_dbs = [f for f in os.listdir(ide_conv) if f.endswith(".db")]
+        if verbose and ide_dbs:
+            print(f"\n[1/3] Analyzing {len(ide_dbs)} conversation database(s) in IDE...")
+
+        for db_file in ide_dbs:
+            ide_db_path = os.path.join(ide_conv, db_file)
+            src_db_path = os.path.join(src_conv, db_file)
+
+            if not os.path.exists(src_db_path):
+                shutil.copy2(ide_db_path, src_db_path)
+                report["dbs_migrated_from_ide"] += 1
+                if verbose:
+                    print(f"  -> Migrated new session from IDE: {db_file}")
+            else:
+                cnt_20, max_20, mt_20 = get_db_step_metrics(src_db_path)
+                cnt_ide, max_ide, mt_ide = get_db_step_metrics(ide_db_path)
+
+                use_ide = False
+                if cnt_ide > cnt_20:
+                    use_ide = True
+                elif cnt_ide == cnt_20 and max_ide > max_20:
+                    use_ide = True
+                elif cnt_ide == cnt_20 and max_ide == max_20 and mt_ide > mt_20:
+                    use_ide = True
+
+                if use_ide:
+                    b_path = f"{src_db_path}.pre_merge_20.bak"
+                    shutil.copy2(src_db_path, b_path)
+                    shutil.copy2(ide_db_path, src_db_path)
+                    report["dbs_conflict_ide_preferred"] += 1
+                    if verbose:
+                        print(f"  -> Updated {db_file}: IDE had superior steps ({cnt_ide} vs {cnt_20})")
+                else:
+                    report["dbs_conflict_20_kept"] += 1
+                    if verbose:
+                        print(f"  -> Kept {db_file}: 2.0 version is equal or newer ({cnt_20} vs {cnt_ide})")
+
+    # 2. Fuse brain/<uuid> folders
+    src_brain = os.path.join(src_base, "brain")
+    ide_brain = os.path.join(ide_base, "brain")
+    os.makedirs(src_brain, exist_ok=True)
+
+    if os.path.exists(ide_brain) and not is_dir_linked(ide_brain):
+        ide_brains = [f for f in os.listdir(ide_brain) if os.path.isdir(os.path.join(ide_brain, f))]
+        if verbose and ide_brains:
+            print(f"\n[2/3] Analyzing {len(ide_brains)} brain directory/directories in IDE...")
+
+        for b_dir in ide_brains:
+            ide_b_path = os.path.join(ide_brain, b_dir)
+            src_b_path = os.path.join(src_brain, b_dir)
+
+            if not os.path.exists(src_b_path):
+                shutil.copytree(ide_b_path, src_b_path)
+                report["brains_migrated_from_ide"] += 1
+                if verbose:
+                    print(f"  -> Migrated new brain folder from IDE: {b_dir[:8]}")
+            else:
+                ide_tf = os.path.join(ide_b_path, ".system_generated", "logs", "transcript_full.jsonl")
+                src_tf = os.path.join(src_b_path, ".system_generated", "logs", "transcript_full.jsonl")
+                if os.path.exists(ide_tf):
+                    ide_size = os.path.getsize(ide_tf)
+                    src_size = os.path.getsize(src_tf) if os.path.exists(src_tf) else 0
+                    if ide_size > src_size:
+                        os.makedirs(os.path.dirname(src_tf), exist_ok=True)
+                        shutil.copy2(ide_tf, src_tf)
+                        if verbose:
+                            print(f"  -> Updated transcript_full.jsonl for {b_dir[:8]} from IDE ({ide_size} > {src_size} bytes)")
+
+                for root, dirs, files in os.walk(ide_b_path):
+                    rel = os.path.relpath(root, ide_b_path)
+                    dst_root = os.path.join(src_b_path, rel)
+                    os.makedirs(dst_root, exist_ok=True)
+                    for file in files:
+                        dst_f = os.path.join(dst_root, file)
+                        src_f = os.path.join(root, file)
+                        if not os.path.exists(dst_f):
+                            shutil.copy2(src_f, dst_f)
+
+                report["brains_merged"] += 1
+
+    # 3. Fuse annotations/
+    src_ann = os.path.join(src_base, "annotations")
+    ide_ann = os.path.join(ide_base, "annotations")
+    os.makedirs(src_ann, exist_ok=True)
+
+    if os.path.exists(ide_ann) and not is_dir_linked(ide_ann):
+        for item in os.listdir(ide_ann):
+            s_i = os.path.join(ide_ann, item)
+            d_i = os.path.join(src_ann, item)
+            if not os.path.exists(d_i):
+                if os.path.isdir(s_i):
+                    shutil.copytree(s_i, d_i)
+                else:
+                    shutil.copy2(s_i, d_i)
+
+    # 4. Archive old IDE folders & Establish Junctions
+    if verbose:
+        print(f"\n[3/3] Creating directory junctions...")
 
     for folder in folders:
-        src_path = os.path.normpath(os.path.join(src_base, folder))
-        link_path = os.path.normpath(os.path.join(ide_base, folder))
-
-        os.makedirs(src_path, exist_ok=True)
+        src_path = os.path.join(src_base, folder)
+        link_path = os.path.join(ide_base, folder)
 
         if os.path.exists(link_path):
             if is_dir_linked(link_path):
                 target = get_link_target(link_path)
                 if os.path.normcase(target) == os.path.normcase(src_path):
                     if verbose:
-                        print(f"  [OK] Already Linked: {folder} ===> {src_path}")
+                        print(f"  [OK] Already Linked: {folder}")
                     continue
                 else:
-                    if verbose:
-                        print(f"  [Fix] Link target mismatch ({target}), recreating...")
                     if sys.platform == "win32":
                         subprocess.run(["cmd.exe", "/c", "rmdir", link_path], check=True)
                     else:
                         os.unlink(link_path)
             else:
-                items = os.listdir(link_path)
-                if items:
-                    if verbose:
-                        print(f"  [Migrate] Found {len(items)} item(s) in {link_path}, merging to {src_path}...")
-                    for item in items:
-                        s_item = os.path.join(link_path, item)
-                        d_item = os.path.join(src_path, item)
-                        if not os.path.exists(d_item):
-                            shutil.move(s_item, d_item)
-                    backup_name = f"{link_path}_backup_{int(time.time())}"
-                    shutil.move(link_path, backup_name)
-                    if verbose:
-                        print(f"  [Backup] Preserved original folder at {backup_name}")
-                else:
-                    os.rmdir(link_path)
+                backup_name = f"{link_path}_migrated_backup_{timestamp}"
+                shutil.move(link_path, backup_name)
+                if verbose:
+                    print(f"  [Backup] Archived original IDE {folder} to {os.path.basename(backup_name)}")
 
-        try:
-            if sys.platform == "win32":
-                cmd = ["cmd.exe", "/c", "mklink", "/J", link_path, src_path]
-                res = subprocess.run(cmd, capture_output=True, text=True)
-                if res.returncode != 0:
-                    raise RuntimeError(res.stderr.strip() or res.stdout.strip())
-            else:
-                os.symlink(src_path, link_path, target_is_directory=True)
+        if sys.platform == "win32":
+            cmd = ["cmd.exe", "/c", "mklink", "/J", link_path, src_path]
+            res = subprocess.run(cmd, capture_output=True, text=True)
+            if res.returncode != 0:
+                raise RuntimeError(f"mklink failed: {res.stderr.strip() or res.stdout.strip()}")
+        else:
+            os.symlink(src_path, link_path, target_is_directory=True)
 
-            if verbose:
-                print(f"  ✅ Created Link: {link_path} ===> {src_path}")
-        except Exception as e:
-            all_ok = False
-            if verbose:
-                print(f"  ❌ Failed to link {folder}: {e}")
+        report["links_created"].append(folder)
+        if verbose:
+            print(f"  ✅ Established Junction: {folder} ===> {src_path}")
 
     if verbose:
-        print("=" * 68 + "\n")
-    return all_ok
+        print("=" * 70)
+        print("  Two-Way Storage Fusion & Junction Setup Completed Successfully!")
+        print("=" * 70)
+
+    return report
+
+
+setup_directory_links = fuse_and_link_storage
 
 
 # ==============================================================================
@@ -1391,6 +1527,65 @@ def run_daemon_loop(interval: int = 60):
         time.sleep(interval)
 
 
+def run_first_time_initialization(verbose: bool = True) -> bool:
+    """
+    Executes the First-Time Zero-Loss Initialization Wizard:
+      Phase 1: Physical Storage Fusion & Junction Setup (2.0 <===> IDE)
+      Phase 2: Orphan Database Adoption (Field 18 ProjectId injection)
+      Phase 3: Step Gap Detection & Hot-Stitch Recovery (transcript_full.jsonl -> SQLite)
+      Phase 4: Incremental Bi-Directional Synchronization
+    """
+    if verbose:
+        print("\n" + "=" * 72)
+        print("  🌟 ANTIGRAVITY FIRST-TIME ZERO-LOSS INITIALIZATION WIZARD 🌟")
+        print("=" * 72)
+        print("This wizard safely fuses past session data from both Antigravity 2.0")
+        print("and Antigravity IDE, links physical storage, and performs full sync.\n")
+
+    # Phase 1: Physical Storage Fusion & Junction Setup
+    if verbose:
+        print("[Phase 1/4] Fusing physical storage and establishing Directory Junctions...")
+    fuse_res = fuse_and_link_storage(CONFIG.gemini_home, verbose=verbose)
+
+    # Phase 2: Orphan Database Adoption
+    if verbose:
+        print("\n[Phase 2/4] Scanning and adopting orphaned physical databases...")
+    adopted = adopt_orphaned_dbs(verbose=verbose)
+    if verbose:
+        print(f"  -> Adopted / patched {len(adopted)} database(s).")
+
+    # Phase 3: Step Gap Detection & Hot-Stitch Recovery
+    if verbose:
+        print("\n[Phase 3/4] Checking and healing step sequence gaps from logs...")
+    healed = heal_step_gaps(verbose=verbose)
+    if verbose:
+        print(f"  -> Healed {len(healed)} session(s) with step gaps.")
+
+    # Phase 4: Bi-directional Metadata Synchronization
+    if verbose:
+        print("\n[Phase 4/4] Executing bi-directional metadata synchronization...")
+    smart_bidirectional_sync(verbose=verbose, log_manual=True)
+
+    if verbose:
+        print("\n" + "=" * 72)
+        print("  🎉 INITIALIZATION WIZARD COMPLETED SUCCESSFULLY! 🎉")
+        print("=" * 72)
+        print("Summary of Actions:")
+        if fuse_res.get("already_linked"):
+            print("  • Physical Storage       : Already linked previously")
+        else:
+            print(f"  • IDE Sessions Migrated  : {fuse_res.get('dbs_migrated_from_ide', 0)}")
+            print(f"  • Conflicted Sessions    : {fuse_res.get('dbs_conflict_ide_preferred', 0)} updated from IDE, {fuse_res.get('dbs_conflict_20_kept', 0)} kept from 2.0")
+            print(f"  • Brain Folders Merged   : {fuse_res.get('brains_migrated_from_ide', 0) + fuse_res.get('brains_merged', 0)}")
+            print(f"  • Junction Links Created : {', '.join(fuse_res.get('links_created', []))}")
+        print(f"  • Orphaned DBs Patched   : {len(adopted)}")
+        print(f"  • Step Gaps Healed       : {len(healed)}")
+        print("Both Antigravity 2.0 and IDE are now fully unified and ready to use!")
+        print("=" * 72 + "\n")
+
+    return True
+
+
 # ==============================================================================
 # CLI Entry Point & Interactive Console
 # ==============================================================================
@@ -1406,6 +1601,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  python antigravity_sync.py --init         Run first-time zero-loss setup wizard (fuses storage & syncs)
   python antigravity_sync.py --sync         Run one-shot bi-directional incremental synchronization
   python antigravity_sync.py --adopt        Scan and inject missing ProjectId into orphaned .db files
   python antigravity_sync.py --check-gaps   Check all conversation databases for step sequence gaps
@@ -1416,6 +1612,7 @@ Examples:
 """
     )
 
+    parser.add_argument("--init", action="store_true", help="Run first-time zero-loss setup wizard (fuse storage, adopt orphans, heal gaps, sync)")
     parser.add_argument("--sync", action="store_true", help="Run one-shot incremental bi-directional sync (Recommended)")
     parser.add_argument("--adopt", action="store_true", help="Scan and adopt orphaned physical .db files")
     parser.add_argument("--check-gaps", action="store_true", help="Check all conversation databases for step gaps")
@@ -1438,6 +1635,10 @@ Examples:
     if args.gemini_home or args.ide_storage:
         global CONFIG
         CONFIG = PathConfig(gemini_home=args.gemini_home, ide_storage_dir=args.ide_storage)
+
+    if args.init:
+        run_first_time_initialization(verbose=True)
+        return
 
     if args.daemon:
         run_daemon_loop(args.interval)
@@ -1508,7 +1709,7 @@ Examples:
 
         links = check_directory_links(CONFIG.gemini_home)
         linked_ok = sum(1 for v in links.values() if v["is_correct"])
-        links_status_str = f"[Active ({linked_ok}/3)]" if linked_ok == 3 else f"[{linked_ok}/3 Action Required: Run 7]"
+        links_status_str = f"[Active ({linked_ok}/3)]" if linked_ok == 3 else f"[{linked_ok}/3 Action Required: Run 0 or 7]"
 
         print(f"\n[Status Overview]")
         print(f"  • Registered Projects    : {len(set(proj_map.values()))} active project(s)")
@@ -1517,6 +1718,7 @@ Examples:
         print(f"  • Startup Daemon         : {'[Installed]' if os.path.exists(CONFIG.vbs_path) else '[Not Installed]'}")
 
         print("\n[Operations]")
+        print("  0. [Init] Run First-Time Setup Wizard (Fuse Storage & Full Sync)")
         print("  1. [Sync] Run Incremental Bi-Directional Synchronization (Recommended)")
         print("  2. [Delete] Interactive Session Permanent Purge Console")
         print("  3. [Adopt] Scan & Inject ProjectId into Orphaned Databases")
@@ -1529,11 +1731,14 @@ Examples:
         print("  Q. Quit")
 
         try:
-            choice = input("\nSelect operation (1-9/Q): ").strip().upper()
+            choice = input("\nSelect operation (0-9/Q): ").strip().upper()
         except Exception:
             choice = "Q"
 
-        if choice == "1":
+        if choice == "0":
+            run_first_time_initialization(verbose=True)
+            input("\nPress Enter to continue...")
+        elif choice == "1":
             smart_bidirectional_sync(verbose=True, log_manual=True)
             input("\nPress Enter to continue...")
         elif choice == "2":
