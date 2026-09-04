@@ -76,6 +76,16 @@ flowchart TD
 - The Antigravity UI frontend requests steps sequentially (`idx = 0, 1, 2, ...`). If any index is missing (e.g., `0..129` followed by `248..404`), the streaming loader encounters a null response at `idx = 130` and **halts rendering permanently**, causing an infinite spinner.
 - AGY-Sync accesses the dual-track `transcript_full.jsonl` stream log, maps the log entries to the Antigravity Step Wire Specification, synthesizes compliant Protobuf records, and inserts them into the physical database.
 
+### 3. ⚖️ Symmetric Peer-to-Peer (P2P) Architecture
+AGY-Sync is built on an **unbiased peer-to-peer (P2P) synchronization model**:
+- **Neither Antigravity 2.0 nor the IDE is treated as a master or slave**.
+- **For IDE-First Users**: If you do all your coding and prompt interactions inside VS Code, your new sessions and latest conversation steps will flow smoothly into Antigravity 2.0.
+- **For 2.0-First Users**: If you converse primarily within the standalone Antigravity 2.0 app, those sessions flow identically into the IDE.
+- **Strict Multi-Tier Conflict Arbitration**:
+  1. **Step Count Priority**: If both sides have diverged, the side with the higher step count (`count(*)` / `max(idx)`) wins.
+  2. **Timestamp Arbiter**: If step counts are identical, the side with the most recent activity timestamp wins.
+  3. **Zero Data Loss**: Unique sessions from either side are automatically federated and mirrored to both sides.
+
 ---
 
 ## 🚀 Getting Started
@@ -107,16 +117,18 @@ Run the First-Time Initialization Wizard to safely fuse everything with **zero d
 python antigravity_sync.py --init
 ```
 
-The wizard automatically performs a 4-stage pipeline:
-1. **Intelligent Storage Fusion & Junction Setup**:
+The wizard automatically performs a 5-stage pipeline:
+1. **Permanent Pre-Init Safety Snapshot**:
+   Before modifying any file or link, an uncompressed milestone snapshot (`PRE_INIT_SNAPSHOT_<timestamp>`) is created under `~/.gemini/config/backups/`. **This snapshot is permanently preserved and exempt from hourly rolling backup cleanup**.
+2. **Intelligent Storage Fusion & Junction Setup**:
    - Compares conversation databases by step count (`count(*)`, `max(idx)`) and modification time — superior versions are preserved, unique IDE sessions are migrated, and automatic `.pre_merge_20.bak` backups are made.
    - Deep-merges `brain/` directories: preserves the longest `transcript_full.jsonl` and merges all non-transcript artifacts.
    - Merges `annotations/`.
    - Archives original IDE folders to `*_migrated_backup_<timestamp>`.
    - Establishes NTFS Directory Junctions (`mklink /J`, Windows) or POSIX Symlinks (macOS/Linux) — **no administrator privileges required**.
-2. **Orphan Database Adoption**: Scans and injects `ProjectId` (Field 18) into newly unified physical databases.
-3. **Step Gap Auto-Healing**: Rescues any interrupted sessions by stitching missing steps from stream logs.
-4. **Bi-Directional Metadata Sync**: Aligns summaries across 2.0, IDE background Protobuf, and IDE `state.vscdb`.
+3. **Orphan Database Adoption**: Scans and injects `ProjectId` (Field 18) into newly unified physical databases.
+4. **Step Gap Auto-Healing**: Rescues any interrupted sessions by stitching missing steps from stream logs.
+5. **Bi-Directional Metadata Sync**: Aligns summaries across 2.0, IDE background Protobuf, and IDE `state.vscdb`.
 
 No external Python dependencies are required — AGY-Sync relies exclusively on the standard library (`sqlite3`, `pathlib`, `argparse`, `dataclasses`, `shutil`, `ctypes`, `subprocess`, etc.).
 
@@ -133,18 +145,56 @@ No external Python dependencies are required — AGY-Sync relies exclusively on 
 
 | Option | Description |
 | :--- | :--- |
-| `python antigravity_sync.py --init` | **First-Time Zero-Loss Setup Wizard**: Fuses physical storage, adopts orphans, heals gaps, and syncs summaries. |
+| `python antigravity_sync.py --init` | **First-Time Zero-Loss Setup Wizard**: Creates permanent pre-init snapshot, fuses storage, adopts orphans, heals gaps, and syncs summaries. |
 | `python antigravity_sync.py --sync` | Run a one-shot incremental bi-directional synchronization (0-write if unchanged). |
 | `python antigravity_sync.py --link` | Setup shared storage links (Directory Junction / Symlink) between 2.0 and IDE. |
 | `python antigravity_sync.py --adopt` | Scan physical conversation `.db` files and inject missing `ProjectId` (Field 18). |
 | `python antigravity_sync.py --check-gaps` | Scan all physical databases to detect step index discontinuities. |
 | `python antigravity_sync.py --heal-gaps` | Automatically stitch and repair detected step gaps from `transcript_full.jsonl`. |
 | `python antigravity_sync.py --backup` | Create an immediate snapshot backup of both 2.0 and IDE state databases. |
+| `python antigravity_sync.py --restore [merge\|overwrite]` | Restore metadata state from backup snapshots with active process check & step diff audit. |
+| `python antigravity_sync.py --decouple [clone\|revert]` | Decouple shared storage ("各管各的"): clone unified data into IDE or revert to pristine pre-init state. |
 | `python antigravity_sync.py --daemon` | Run continuous background polling loop (default: every 60 seconds). |
 | `python antigravity_sync.py --install-startup` | Install silent Windows startup service (`pythonw.exe` via VBScript). |
 | `python antigravity_sync.py --uninstall-startup` | Remove the Windows silent background startup service. |
 | `python antigravity_sync.py --gemini-home <PATH>` | Explicitly specify custom `.gemini` home directory. |
 | `python antigravity_sync.py --ide-storage <PATH>` | Explicitly specify custom IDE `globalStorage` directory. |
+
+### 🔄 Decoupling & Rollback ("各管各的" / `--decouple`)
+If you ever wish to stop sharing storage and return to separate directories:
+```bash
+# Branch A (Recommended): Materialize & Clone — Zero Data Loss
+python antigravity_sync.py --decouple clone
+
+# Branch B: Revert to Pristine Pre-Init State
+python antigravity_sync.py --decouple revert
+```
+- **Mode 1 (`clone`, Default & Recommended)**:
+  - Safely deletes the Directory Junction reparse points (using `rmdir` on Windows — **never** deleting target data!).
+  - Clones all unified `conversations/`, `brain/`, and `annotations/` directly into `antigravity-ide/`.
+  - **Result**: Both Antigravity 2.0 and IDE retain 100% of all past and recent conversations, completely independent of each other.
+- **Mode 2 (`revert`)**:
+  - Removes the directory links and restores the original pre-init IDE folders from `*_migrated_backup_<timestamp>`.
+  - Reverts any 2.0 files that were backed up as `.pre_merge_20.bak`.
+  - Restores pre-init metadata from the `PRE_INIT_SNAPSHOT`.
+
+### 🛡️ Safety-Audited Restore (`--restore`)
+Restoring an older backup could silently cause newer conversations to vanish or step counts to regress. AGY-Sync implements a 3-layer safeguard:
+```bash
+# Safe Merge Restore (Recommended)
+python antigravity_sync.py --restore merge
+
+# Force Mirror Overwrite
+python antigravity_sync.py --restore overwrite
+```
+1. **Active Process Detection**: Checks if `Code.exe` or `antigravity.exe` is currently running and warns you to close them to prevent read-after-write collisions.
+2. **Pre-Restore Safety Snapshot**: Automatically creates a non-expiring snapshot (`SAFETY_SNAPSHOT_BEFORE_RESTORE_<timestamp>`) before any file modification.
+3. **Step Diff Audit**: Compares active sessions against the backup and prints clear warnings:
+   - Lists sessions that exist now but are **missing in the backup** (would be wiped in mirror mode).
+   - Lists sessions whose **step count would regress** (active steps > backup steps).
+4. **Recovery Modes**:
+   - **Safe Merge (`merge`)**: Restores deleted sessions while preserving current higher step counts and latest timestamps for active sessions.
+   - **Force Mirror (`overwrite`)**: Overwrites active metadata completely to mirror the backup state.
 
 ### Interactive Console Mode
 Simply launch the script without flags to open the comprehensive interactive management console:
@@ -152,22 +202,33 @@ Simply launch the script without flags to open the comprehensive interactive man
 python antigravity_sync.py
 ```
 ```text
-======================================================================
-     ANTIGRAVITY 2.0 <-> IDE SYNC & RECOVERY MANAGER
-======================================================================
- [1] Check Sync Status & Summary Statistics
- [2] Run Bi-Directional Incremental Synchronization
- [3] Scan & Adopt Orphaned Physical .db Files
- [4] Check for Step Sequence Gaps across all Databases
- [5] Auto-Heal & Stitch Step Gaps from Full Transcript Logs
- [6] Restore Soft-Deleted / Graveyard Sessions
- [7] Permanently Purge Deleted Sessions
- [8] Create Immediate Snapshot Backup
- [9] Run Background Daemon Polling Loop
- [10] Install Windows Silent Background Startup
- [11] Uninstall Windows Background Startup
- [0] Exit
-======================================================================
+====================================================================
+  Antigravity 2.0 <-> IDE Session Synchronization Console
+  * NOTICE: Recommended to run while 2.0 & IDE are closed.
+  * Daemon mode is theoretically operational, but untested.
+====================================================================
+
+[Status Overview]
+  • Registered Projects    : 6 active project(s)
+  • Active Conversations   : 42 session(s)
+  • Shared Storage Links   : [Active (3/3)]
+  • Startup Daemon         : [Installed]
+
+[Operations]
+  0. [Init] Run First-Time Setup Wizard (Fuse Storage & Full Sync)
+  1. [Sync] Run Incremental Bi-Directional Synchronization (Recommended)
+  2. [Restore] Restore from Backup Snapshot with Step Audit
+  3. [Decouple] Decouple Shared Storage ('各管各的' / Revert to Pristine)
+  4. [Delete] Interactive Session Permanent Purge Console
+  5. [Adopt] Scan & Inject ProjectId into Orphaned Databases
+  6. [Check] Scan All Databases for Step Sequence Gaps
+  7. [Heal] Hot-Stitch Step Gaps from Logs into SQLite
+  8. [Backup] Force Immediate Data Snapshot Backup
+  9. [Link] Setup Shared Storage Links (Junction / Symlink)
+  10. [Startup] Install Silent Windows Auto-Startup Daemon
+  11. [Uninstall] Remove Auto-Startup Daemon
+  Q. Quit
+====================================================================
 ```
 
 ---

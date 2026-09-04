@@ -156,6 +156,48 @@ def check_directory_links(gemini_home: str) -> Dict[str, Dict[str, Any]]:
     return results
 
 
+def check_running_processes() -> List[str]:
+    """Checks if VS Code or Antigravity processes are currently active."""
+    if sys.platform != "win32":
+        return []
+    running = []
+    try:
+        res = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True)
+        out = res.stdout.lower()
+        if "code.exe" in out:
+            running.append("VS Code (Code.exe)")
+        if "antigravity.exe" in out:
+            running.append("Antigravity Desktop (antigravity.exe)")
+    except Exception:
+        pass
+    return running
+
+
+def safely_remove_junction(link_path: str) -> bool:
+    """
+    Safely removes a Windows Directory Junction or POSIX symlink without deleting target files.
+    Strictly avoids shutil.rmtree to prevent recursive deletion of shared target folders.
+    """
+    if not os.path.exists(link_path):
+        return True
+    if not is_dir_linked(link_path):
+        return False
+
+    if sys.platform == "win32":
+        res = subprocess.run(["cmd.exe", "/c", "rmdir", link_path], capture_output=True, text=True)
+        if res.returncode != 0:
+            try:
+                os.rmdir(link_path)
+            except Exception as e:
+                raise RuntimeError(f"Failed to remove directory junction {link_path}: {e}")
+    else:
+        try:
+            os.unlink(link_path)
+        except Exception as e:
+            raise RuntimeError(f"Failed to remove symlink {link_path}: {e}")
+    return True
+
+
 def get_db_step_metrics(db_path: str) -> Tuple[int, int, float]:
     """Returns (step_count, max_idx, mtime) from a conversation database."""
     try:
@@ -335,10 +377,7 @@ def fuse_and_link_storage(gemini_home: str, verbose: bool = True) -> Dict[str, A
                         print(f"  [OK] Already Linked: {folder}")
                     continue
                 else:
-                    if sys.platform == "win32":
-                        subprocess.run(["cmd.exe", "/c", "rmdir", link_path], check=True)
-                    else:
-                        os.unlink(link_path)
+                    safely_remove_junction(link_path)
             else:
                 backup_name = f"{link_path}_migrated_backup_{timestamp}"
                 shutil.move(link_path, backup_name)
@@ -366,6 +405,130 @@ def fuse_and_link_storage(gemini_home: str, verbose: bool = True) -> Dict[str, A
 
 
 setup_directory_links = fuse_and_link_storage
+
+
+def decouple_storage(gemini_home: Optional[str] = None, mode: str = "clone", verbose: bool = True) -> bool:
+    """
+    Decouples shared storage between Antigravity 2.0 and IDE ('各管各的').
+    mode='clone':
+        Decouple & Materialize (Recommended). Safely removes junctions and deep-clones
+        current latest shared data into antigravity-ide/ so both sides keep all conversations.
+    mode='revert':
+        Reverts to pristine pre-init state. Removes junctions, restores original IDE folders
+        from migrated backups, reverts .pre_merge_20.bak files, and restores pre-init metadata.
+    """
+    if gemini_home is None:
+        gemini_home = CONFIG.gemini_home
+
+    src_base = os.path.normpath(os.path.join(gemini_home, "antigravity"))
+    ide_base = os.path.normpath(os.path.join(gemini_home, "antigravity-ide"))
+    folders = ["conversations", "brain", "annotations"]
+
+    links = check_directory_links(gemini_home)
+    is_any_linked = any(v["is_link"] for v in links.values())
+    if not is_any_linked:
+        if verbose:
+            print("\nℹ️ Storage is not currently linked via Junction/Symlink. Nothing to decouple.")
+        return False
+
+    procs = check_running_processes()
+    if procs and verbose:
+        print("\n" + "=" * 70)
+        print(f"⚠️  ACTIVE PROCESS WARNING: Conflicting active process(es) detected: {', '.join(procs)}")
+        print("    For complete data safety, please close VS Code / Antigravity before decoupling.")
+        print("=" * 70)
+
+    if mode == "clone":
+        if verbose:
+            print("\n" + "=" * 70)
+            print("  Decoupling Storage: Mode 1 [Decouple & Materialize] (Recommended)")
+            print("  This removes junctions and deep-clones current latest shared data into IDE.")
+            print("  Both 2.0 and IDE will retain 100% of all sessions and operate independently.")
+            print("=" * 70)
+
+        for folder in folders:
+            link_path = os.path.join(ide_base, folder)
+            src_path = os.path.join(src_base, folder)
+            if is_dir_linked(link_path):
+                safely_remove_junction(link_path)
+                if verbose:
+                    print(f"  -> Safely removed junction: {folder}")
+            if os.path.exists(src_path):
+                shutil.copytree(src_path, link_path)
+                if verbose:
+                    print(f"  -> Cloned physical copy to IDE: {folder}")
+
+        log_event("🔓 Storage decoupled (Mode 1: Materialized clones created for IDE).")
+        if verbose:
+            print("\n✅ Decoupling completed successfully!")
+            print("   Both Antigravity 2.0 and IDE now operate independently ('各管各的').")
+            print("   All recent conversations are 100% preserved in both applications.")
+            print("=" * 70 + "\n")
+        return True
+
+    elif mode == "revert":
+        if verbose:
+            print("\n" + "=" * 70)
+            print("  Decoupling Storage: Mode 2 [Revert to Pristine Pre-Init State]")
+            print("  ⚠️ CAUTION: This will restore original IDE folders from pre-init backup.")
+            print("  Any conversations created since initialization will remain in 2.0 only.")
+            print("=" * 70)
+
+        # 1. Safely remove junctions
+        for folder in folders:
+            link_path = os.path.join(ide_base, folder)
+            if is_dir_linked(link_path):
+                safely_remove_junction(link_path)
+                if verbose:
+                    print(f"  -> Safely removed junction: {folder}")
+
+        # 2. Restore migrated backups in IDE
+        migrated_dirs = [d for d in os.listdir(ide_base) if "_migrated_backup_" in d] if os.path.exists(ide_base) else []
+        for folder in folders:
+            baks = sorted([d for d in migrated_dirs if d.startswith(f"{folder}_migrated_backup_")])
+            if baks:
+                latest_bak = os.path.join(ide_base, baks[-1])
+                target_dir = os.path.join(ide_base, folder)
+                if not os.path.exists(target_dir):
+                    shutil.move(latest_bak, target_dir)
+                    if verbose:
+                        print(f"  -> Restored original IDE {folder} from {os.path.basename(latest_bak)}")
+
+        # 3. Restore 2.0 .pre_merge_20.bak files
+        conv_dir = os.path.join(src_base, "conversations")
+        if os.path.exists(conv_dir):
+            for f in os.listdir(conv_dir):
+                if f.endswith(".pre_merge_20.bak"):
+                    orig_f = f[:-len(".pre_merge_20.bak")]
+                    shutil.copy2(os.path.join(conv_dir, f), os.path.join(conv_dir, orig_f))
+                    os.remove(os.path.join(conv_dir, f))
+                    if verbose:
+                        print(f"  -> Reverted 2.0 conflict database: {orig_f}")
+
+        # 4. Restore pre-init metadata from latest PRE_INIT_SNAPSHOT
+        pre_init_snaps = sorted([
+            b for b in glob.glob(os.path.join(CONFIG.backup_root, "PRE_INIT_SNAPSHOT_*"))
+            if os.path.isdir(b)
+        ], key=os.path.getmtime)
+
+        if pre_init_snaps:
+            latest_snap = pre_init_snaps[-1]
+            if os.path.exists(os.path.join(latest_snap, "agyhub_summaries_proto.pb")):
+                shutil.copy2(os.path.join(latest_snap, "agyhub_summaries_proto.pb"), CONFIG.src_pb)
+            if os.path.exists(os.path.join(latest_snap, "ide_pb.pb")):
+                shutil.copy2(os.path.join(latest_snap, "ide_pb.pb"), CONFIG.ide_pb)
+            if os.path.exists(os.path.join(latest_snap, "state.vscdb")):
+                shutil.copy2(os.path.join(latest_snap, "state.vscdb"), CONFIG.ide_db_path)
+            if verbose:
+                print(f"  -> Restored pre-init metadata from {os.path.basename(latest_snap)}")
+
+        log_event("⏪ Storage reverted to pristine pre-init state.")
+        if verbose:
+            print("\n✅ Revert completed successfully! Pristine pre-init state restored.")
+            print("=" * 70 + "\n")
+        return True
+
+    return False
 
 
 # ==============================================================================
@@ -1351,14 +1514,30 @@ def smart_bidirectional_sync(verbose: bool = True, log_manual: bool = False) -> 
 # Backup & Hourly Rotation Manager
 # ==============================================================================
 
-def hourly_backup_manager(max_retention: int = 10, force: bool = False) -> bool:
-    """Creates a timestamped snapshot of summaries and state DBs, keeping the latest N copies."""
+def create_backup_snapshot(
+    category: str = "hourly",
+    max_retention: int = 10,
+    force: bool = False,
+    note: str = ""
+) -> Optional[str]:
+    """
+    Creates a timestamped snapshot of summaries and state DBs.
+    Categories: 'hourly', 'manual', 'pre_init', 'pre_restore'.
+    Milestone snapshots ('pre_init', 'pre_restore') are permanently exempt from rotation.
+    """
     now = datetime.now()
-    slot_name = now.strftime("%Y%m%d_%H0000") if not force else now.strftime("manual_%Y%m%d_%H%M%S")
-    target_dir = os.path.join(CONFIG.backup_root, slot_name)
+    if category == "pre_init":
+        slot_name = f"PRE_INIT_SNAPSHOT_{now.strftime('%Y%m%d_%H%M%S')}"
+    elif category == "pre_restore":
+        slot_name = f"SAFETY_SNAPSHOT_BEFORE_RESTORE_{now.strftime('%Y%m%d_%H%M%S')}"
+    elif category == "manual":
+        slot_name = f"manual_{now.strftime('%Y%m%d_%H%M%S')}"
+    else:
+        slot_name = now.strftime("%Y%m%d_%H0000")
 
-    if os.path.exists(target_dir) and not force:
-        return False
+    target_dir = os.path.join(CONFIG.backup_root, slot_name)
+    if os.path.exists(target_dir) and not force and category == "hourly":
+        return None
 
     os.makedirs(target_dir, exist_ok=True)
 
@@ -1369,18 +1548,240 @@ def hourly_backup_manager(max_retention: int = 10, force: bool = False) -> bool:
     if os.path.exists(CONFIG.ide_db_path):
         shutil.copy2(CONFIG.ide_db_path, os.path.join(target_dir, "state.vscdb"))
 
-    log_event(f"📦 Backup created: {slot_name}")
+    manifest = {
+        "slot_name": slot_name,
+        "category": category,
+        "created_at": now.isoformat(),
+        "note": note,
+        "gemini_home": CONFIG.gemini_home,
+        "ide_storage_dir": CONFIG.ide_storage_dir
+    }
+    with open(os.path.join(target_dir, "manifest.json"), "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
 
-    # Rotate old backups
-    all_backups = sorted(glob.glob(os.path.join(CONFIG.backup_root, "*")), key=os.path.getmtime)
-    if len(all_backups) > max_retention:
-        for old in all_backups[:-max_retention]:
+    log_event(f"📦 Backup created [{category}]: {slot_name}")
+
+    # Rotate old routine backups, EXEMPTING milestone snapshots
+    routine_backups = sorted([
+        b for b in glob.glob(os.path.join(CONFIG.backup_root, "*"))
+        if os.path.isdir(b) and not os.path.basename(b).startswith("PRE_INIT_SNAPSHOT_")
+           and not os.path.basename(b).startswith("SAFETY_SNAPSHOT_BEFORE_RESTORE_")
+    ], key=os.path.getmtime)
+
+    if len(routine_backups) > max_retention:
+        for old in routine_backups[:-max_retention]:
             try:
                 shutil.rmtree(old)
-                log_event(f"🗑️ Rotated old backup: {os.path.basename(old)}")
+                log_event(f"🗑️ Rotated old routine backup: {os.path.basename(old)}")
             except Exception:
                 pass
 
+    return target_dir
+
+
+def hourly_backup_manager(max_retention: int = 10, force: bool = False) -> bool:
+    """Invoked hourly by daemon or manually by user."""
+    res = create_backup_snapshot(
+        category="manual" if force else "hourly",
+        max_retention=max_retention,
+        force=force
+    )
+    return res is not None
+
+
+def audit_backup_diff(backup_dir: str) -> Tuple[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Audits the difference between current active sessions and a target backup.
+    Returns: (active_summaries, backup_summaries, missing_in_backup, step_regressions)
+    """
+    active_map = {}
+    if os.path.exists(CONFIG.src_pb):
+        try:
+            with open(CONFIG.src_pb, 'rb') as f:
+                for s in parse_summaries_from_pb(f.read()):
+                    u = s.get("uuid")
+                    if u:
+                        active_map[u] = s
+        except Exception:
+            pass
+
+    backup_map = {}
+    b_pb = os.path.join(backup_dir, "agyhub_summaries_proto.pb")
+    if not os.path.exists(b_pb):
+        b_pb = os.path.join(backup_dir, "ide_pb.pb")
+    if os.path.exists(b_pb):
+        try:
+            with open(b_pb, 'rb') as f:
+                for s in parse_summaries_from_pb(f.read()):
+                    u = s.get("uuid")
+                    if u:
+                        backup_map[u] = s
+        except Exception:
+            pass
+
+    missing_in_backup = []
+    step_regressions = []
+
+    for u, cur_s in active_map.items():
+        cur_steps = cur_s.get("step_count", 0)
+        title = cur_s.get("title", u[:8])
+        if u not in backup_map:
+            missing_in_backup.append({
+                "uuid": u,
+                "title": title,
+                "active_steps": cur_steps,
+                "active_mtime": cur_s.get("active_time_s", 0)
+            })
+        else:
+            b_s = backup_map[u]
+            b_steps = b_s.get("step_count", 0)
+            if cur_steps > b_steps:
+                step_regressions.append({
+                    "uuid": u,
+                    "title": title,
+                    "active_steps": cur_steps,
+                    "backup_steps": b_steps,
+                    "diff": cur_steps - b_steps
+                })
+
+    return active_map, backup_map, missing_in_backup, step_regressions
+
+
+def restore_from_backup(backup_dir: Optional[str] = None, mode: str = "merge", verbose: bool = True) -> bool:
+    """
+    Restores metadata from a backup snapshot with safety audits and step protection.
+    mode='merge':
+        Safe Merge Restore (Recommended). Restores missing metadata, but retains higher
+        step counts and newer timestamps for currently active sessions. Zero step loss!
+    mode='overwrite':
+        Force Mirror Overwrite. Replaces active metadata directly with backup files.
+    """
+    procs = check_running_processes()
+    if procs and verbose:
+        print("\n" + "=" * 72)
+        print(f"⚠️  ACTIVE PROCESS WARNING: Conflicting active process(es) detected: {', '.join(procs)}")
+        print("    Please close VS Code and Antigravity before restoring to avoid memory overwrite.")
+        print("=" * 72)
+
+    all_backups = sorted(glob.glob(os.path.join(CONFIG.backup_root, "*")), key=os.path.getmtime, reverse=True)
+    if not all_backups:
+        if verbose:
+            print("\n❌ No backups found in backup directory.")
+        return False
+
+    if backup_dir is None:
+        print("\nAvailable Backup Snapshots:")
+        limit = min(len(all_backups), 15)
+        for idx, b in enumerate(all_backups[:limit]):
+            b_name = os.path.basename(b)
+            tag = ""
+            if b_name.startswith("PRE_INIT_SNAPSHOT_"):
+                tag = " [PRE-INIT MILESTONE]"
+            elif b_name.startswith("SAFETY_SNAPSHOT_"):
+                tag = " [PRE-RESTORE SAFETY]"
+            elif b_name.startswith("manual_"):
+                tag = " [MANUAL]"
+            else:
+                tag = " [HOURLY]"
+            mt_str = datetime.fromtimestamp(os.path.getmtime(b)).strftime("%Y-%m-%d %H:%M:%S")
+            print(f"  {idx + 1:2d}. {b_name}{tag} ({mt_str})")
+
+        sel = input(f"\nSelect backup snapshot to restore (1-{limit}/Q): ").strip()
+        if not sel.isdigit() or not (1 <= int(sel) <= limit):
+            print("Restore cancelled.")
+            return False
+        backup_dir = all_backups[int(sel) - 1]
+
+    b_name = os.path.basename(backup_dir)
+
+    active_map, backup_map, missing, regressions = audit_backup_diff(backup_dir)
+
+    if verbose:
+        print("\n" + "=" * 72)
+        print("  📊 BACKUP AUDIT & STEP REGRESSION ANALYSIS")
+        print("=" * 72)
+        print(f"Target Backup  : {b_name}")
+        print(f"Active Sessions: {len(active_map)} | Backup Sessions: {len(backup_map)}")
+
+        if missing:
+            print(f"\n⚠️  {len(missing)} session(s) created AFTER this backup:")
+            for m in missing[:5]:
+                print(f"   • [{m['uuid'][:8]}] {m['title']} ({m['active_steps']} steps)")
+            if len(missing) > 5:
+                print(f"   ... and {len(missing) - 5} more sessions")
+            if mode == "overwrite":
+                print("   🚨 In 'overwrite' mode, these sessions will be excluded from index!")
+
+        if regressions:
+            print(f"\n⚠️  {len(regressions)} session(s) have MORE steps currently than in this backup:")
+            for r in regressions[:5]:
+                print(f"   • [{r['uuid'][:8]}] {r['title']} (Current: {r['active_steps']} vs Backup: {r['backup_steps']} steps, -{r['diff']} steps!)")
+            if len(regressions) > 5:
+                print(f"   ... and {len(regressions) - 5} more sessions")
+            if mode == "overwrite":
+                print("   🚨 In 'overwrite' mode, chat history steps will regress!")
+
+        if not missing and not regressions:
+            print("\n✅ Zero step regression or missing sessions detected.")
+        print("=" * 72)
+
+    safety_snap = create_backup_snapshot(
+        category="pre_restore",
+        force=True,
+        note=f"Automatic safety snapshot taken immediately before restoring {b_name}"
+    )
+    if verbose and safety_snap:
+        print(f"\n🛡️ Created Pre-Restore Safety Snapshot: {os.path.basename(safety_snap)}")
+
+    if mode == "merge":
+        if verbose:
+            print("\nApplying Safe Merge Restore (keeping highest step count & latest timestamps)...")
+
+        b_src_pb = os.path.join(backup_dir, "agyhub_summaries_proto.pb")
+        if os.path.exists(b_src_pb):
+            with open(b_src_pb, 'rb') as f:
+                b_raw = f.read()
+            b_summaries = parse_summaries_from_pb(b_raw)
+            for s in b_summaries:
+                u = s.get("uuid")
+                if not u:
+                    continue
+                if u not in active_map:
+                    active_map[u] = s
+                else:
+                    cur = active_map[u]
+                    if s.get("step_count", 0) > cur.get("step_count", 0):
+                        active_map[u]["step_count"] = s["step_count"]
+                    if s.get("active_time_s", 0) > cur.get("active_time_s", 0):
+                        active_map[u]["active_time_s"] = s["active_time_s"]
+                        active_map[u]["title"] = s.get("title", cur.get("title"))
+
+        smart_bidirectional_sync(verbose=verbose, log_manual=True)
+        if verbose:
+            print(f"\n✅ Safe Merge Restore completed successfully! All {len(active_map)} sessions intact with zero step loss.")
+
+    elif mode == "overwrite":
+        if verbose:
+            confirm = input("\nType 'CONFIRM' to execute force mirror overwrite: ").strip()
+            if confirm != "CONFIRM":
+                print("Restore cancelled.")
+                return False
+
+        b_src_pb = os.path.join(backup_dir, "agyhub_summaries_proto.pb")
+        b_ide_pb = os.path.join(backup_dir, "ide_pb.pb")
+        b_vscdb = os.path.join(backup_dir, "state.vscdb")
+
+        if os.path.exists(b_src_pb) and os.path.exists(CONFIG.src_pb):
+            shutil.copy2(b_src_pb, CONFIG.src_pb)
+        if os.path.exists(b_ide_pb) and os.path.exists(CONFIG.ide_pb):
+            shutil.copy2(b_ide_pb, CONFIG.ide_pb)
+        if os.path.exists(b_vscdb) and os.path.exists(CONFIG.ide_db_path):
+            shutil.copy2(b_vscdb, CONFIG.ide_db_path)
+
+        if verbose:
+            print(f"\n✅ Force mirror overwrite completed from {b_name}.")
+
+    log_event(f"🔄 Restored from backup: {b_name} (mode={mode})")
     return True
 
 
@@ -1530,6 +1931,7 @@ def run_daemon_loop(interval: int = 60):
 def run_first_time_initialization(verbose: bool = True) -> bool:
     """
     Executes the First-Time Zero-Loss Initialization Wizard:
+      Phase 0: Pre-Init Milestone Snapshot & Active Process Safety Check
       Phase 1: Physical Storage Fusion & Junction Setup (2.0 <===> IDE)
       Phase 2: Orphan Database Adoption (Field 18 ProjectId injection)
       Phase 3: Step Gap Detection & Hot-Stitch Recovery (transcript_full.jsonl -> SQLite)
@@ -1540,11 +1942,38 @@ def run_first_time_initialization(verbose: bool = True) -> bool:
         print("  🌟 ANTIGRAVITY FIRST-TIME ZERO-LOSS INITIALIZATION WIZARD 🌟")
         print("=" * 72)
         print("This wizard safely fuses past session data from both Antigravity 2.0")
-        print("and Antigravity IDE, links physical storage, and performs full sync.\n")
+        print("and Antigravity IDE, links physical storage, and performs full sync.")
+        print("\nℹ️  PEER-TO-PEER SYMMETRIC ARCHITECTURE NOTICE:")
+        print("   Whether you primarily use Antigravity 2.0 or Antigravity IDE, all")
+        print("   sessions are merged symmetrically. The version with more steps and")
+        print("   newer activity wins. Zero data loss for both 2.0 and IDE users!\n")
+
+    # Safety check: active running processes
+    procs = check_running_processes()
+    if procs and verbose:
+        print("=" * 72)
+        print(f"⚠️  ACTIVE PROCESS WARNING: {', '.join(procs)} is currently running.")
+        print("    It is strongly advised to close VS Code / Antigravity before initialization")
+        print("    to avoid database write locks and memory overwrite conflicts.")
+        print("=" * 72 + "\n")
+
+    # Phase 0: Pre-Init Milestone Snapshot (if not already linked)
+    links = check_directory_links(CONFIG.gemini_home)
+    is_linked = all(v["is_correct"] for v in links.values())
+    if not is_linked:
+        if verbose:
+            print("[Phase 0/4] Creating permanent Pre-Init Milestone Snapshot...")
+        snap = create_backup_snapshot(
+            category="pre_init",
+            force=True,
+            note="Milestone snapshot taken prior to first-time initialization"
+        )
+        if verbose and snap:
+            print(f"  -> Snapshot archived to {os.path.basename(snap)} (Protected from rotation).")
 
     # Phase 1: Physical Storage Fusion & Junction Setup
     if verbose:
-        print("[Phase 1/4] Fusing physical storage and establishing Directory Junctions...")
+        print("\n[Phase 1/4] Fusing physical storage and establishing Directory Junctions...")
     fuse_res = fuse_and_link_storage(CONFIG.gemini_home, verbose=verbose)
 
     # Phase 2: Orphan Database Adoption
@@ -1603,6 +2032,8 @@ def main():
 Examples:
   python antigravity_sync.py --init         Run first-time zero-loss setup wizard (fuses storage & syncs)
   python antigravity_sync.py --sync         Run one-shot bi-directional incremental synchronization
+  python antigravity_sync.py --decouple     Decouple shared storage ('各管各的', keeping all sessions)
+  python antigravity_sync.py --restore      Restore metadata from snapshot with step regression audit
   python antigravity_sync.py --adopt        Scan and inject missing ProjectId into orphaned .db files
   python antigravity_sync.py --check-gaps   Check all conversation databases for step sequence gaps
   python antigravity_sync.py --heal-gaps    Auto-recover and stitch missing steps from streaming logs
@@ -1614,6 +2045,10 @@ Examples:
 
     parser.add_argument("--init", action="store_true", help="Run first-time zero-loss setup wizard (fuse storage, adopt orphans, heal gaps, sync)")
     parser.add_argument("--sync", action="store_true", help="Run one-shot incremental bi-directional sync (Recommended)")
+    parser.add_argument("--decouple", choices=["clone", "revert"], nargs="?", const="clone",
+                        help="Decouple shared storage ('各管各的'). 'clone' keeps all data independently; 'revert' restores pre-init state.")
+    parser.add_argument("--restore", choices=["merge", "overwrite"], nargs="?", const="merge",
+                        help="Restore metadata from backup snapshot with step audit. 'merge' (default/safe) prevents step regression.")
     parser.add_argument("--adopt", action="store_true", help="Scan and adopt orphaned physical .db files")
     parser.add_argument("--check-gaps", action="store_true", help="Check all conversation databases for step gaps")
     parser.add_argument("--heal-gaps", action="store_true", help="Hot-stitch and recover step gaps from logs")
@@ -1638,6 +2073,14 @@ Examples:
 
     if args.init:
         run_first_time_initialization(verbose=True)
+        return
+
+    if args.decouple:
+        decouple_storage(CONFIG.gemini_home, mode=args.decouple, verbose=True)
+        return
+
+    if args.restore:
+        restore_from_backup(mode=args.restore, verbose=True)
         return
 
     if args.daemon:
@@ -1720,18 +2163,20 @@ Examples:
         print("\n[Operations]")
         print("  0. [Init] Run First-Time Setup Wizard (Fuse Storage & Full Sync)")
         print("  1. [Sync] Run Incremental Bi-Directional Synchronization (Recommended)")
-        print("  2. [Delete] Interactive Session Permanent Purge Console")
-        print("  3. [Adopt] Scan & Inject ProjectId into Orphaned Databases")
-        print("  4. [Check] Scan All Databases for Step Sequence Gaps")
-        print("  5. [Heal] Hot-Stitch Step Gaps from Logs into SQLite")
-        print("  6. [Backup] Force Immediate Data Snapshot Backup")
-        print("  7. [Link] Setup Shared Storage Links (Junction / Symlink)")
-        print("  8. [Startup] Install Silent Windows Auto-Startup Daemon")
-        print("  9. [Uninstall] Remove Auto-Startup Daemon")
+        print("  2. [Restore] Restore from Backup Snapshot with Step Audit")
+        print("  3. [Decouple] Decouple Shared Storage ('各管各的' / Revert to Pristine)")
+        print("  4. [Delete] Interactive Session Permanent Purge Console")
+        print("  5. [Adopt] Scan & Inject ProjectId into Orphaned Databases")
+        print("  6. [Check] Scan All Databases for Step Sequence Gaps")
+        print("  7. [Heal] Hot-Stitch Step Gaps from Logs into SQLite")
+        print("  8. [Backup] Force Immediate Data Snapshot Backup")
+        print("  9. [Link] Setup Shared Storage Links (Junction / Symlink)")
+        print("  10. [Startup] Install Silent Windows Auto-Startup Daemon")
+        print("  11. [Uninstall] Remove Auto-Startup Daemon")
         print("  Q. Quit")
 
         try:
-            choice = input("\nSelect operation (0-9/Q): ").strip().upper()
+            choice = input("\nSelect operation (0-11/Q): ").strip().upper()
         except Exception:
             choice = "Q"
 
@@ -1742,37 +2187,57 @@ Examples:
             smart_bidirectional_sync(verbose=True, log_manual=True)
             input("\nPress Enter to continue...")
         elif choice == "2":
-            interactive_delete_ui()
+            print("\nRestore Mode:")
+            print("  1. [Safe Merge] Restore missing sessions, keep highest steps & newest time (Recommended)")
+            print("  2. [Force Mirror] Overwrite active state directly from backup")
+            r_choice = input("Select restore mode (1/2/Cancel): ").strip()
+            if r_choice == "1":
+                restore_from_backup(mode="merge", verbose=True)
+            elif r_choice == "2":
+                restore_from_backup(mode="overwrite", verbose=True)
             input("\nPress Enter to continue...")
         elif choice == "3":
+            print("\nDecouple Options ('各管各的'):")
+            print("  1. [Materialize & Clone] Keep 100% of all sessions independently (Recommended)")
+            print("  2. [Revert] Undo initialization and revert to pristine pre-init state")
+            d_choice = input("Select decouple mode (1/2/Cancel): ").strip()
+            if d_choice == "1":
+                decouple_storage(CONFIG.gemini_home, mode="clone", verbose=True)
+            elif d_choice == "2":
+                decouple_storage(CONFIG.gemini_home, mode="revert", verbose=True)
+            input("\nPress Enter to continue...")
+        elif choice == "4":
+            interactive_delete_ui()
+            input("\nPress Enter to continue...")
+        elif choice == "5":
             items = adopt_orphaned_dbs(verbose=True)
             print(f"✅ Orphan adoption complete: Injected ProjectId into {len(items)} database(s).")
             input("\nPress Enter to continue...")
-        elif choice == "4":
+        elif choice == "6":
             gaps = check_step_gaps(verbose=True)
             if not gaps:
                 print("\n✅ All databases have contiguous steps. Zero gaps.")
             else:
                 print(f"\n⚠️ Found {len(gaps)} session(s) with step sequence gaps.")
             input("\nPress Enter to continue...")
-        elif choice == "5":
+        elif choice == "7":
             healed = heal_step_gaps(verbose=True)
             if healed:
                 print(f"\n✅ Stitched and healed {len(healed)} session(s).")
             else:
                 print("\nℹ️ No step gaps required healing.")
             input("\nPress Enter to continue...")
-        elif choice == "6":
+        elif choice == "8":
             b_res = hourly_backup_manager(max_retention=10, force=True)
             print("\n✅ Backup completed successfully!" if b_res else "\nℹ️ Backup skipped.")
             input("\nPress Enter to continue...")
-        elif choice == "7":
+        elif choice == "9":
             setup_directory_links(CONFIG.gemini_home, verbose=True)
             input("\nPress Enter to continue...")
-        elif choice == "8":
+        elif choice == "10":
             install_startup()
             input("\nPress Enter to continue...")
-        elif choice == "9":
+        elif choice == "11":
             uninstall_startup()
             input("\nPress Enter to continue...")
         else:

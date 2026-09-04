@@ -76,6 +76,15 @@ flowchart TD
 - 前端按递增步数请求。一旦由于历史崩溃丢失了中间步骤（如存在 `0..129` 和 `248..404`，缺失 `130..247`），读到 `130` 返回空即**彻底截断后续所有最新对话**，表现为页面死锁转圈。
 - 双轨存储保障：`brain/<uuid>/.system_generated/logs/transcript_full.jsonl` 为只追加纯文本日志，即便物理 DB 损坏，全部思维链、提问与回复均 100% 完整保留。AGY-Sync 能自动缝合断层并恢复渲染。
 
+### 3. ⚖️ 对等双向 P2P 同步理念 (Symmetric Peer-to-Peer)
+AGY-Sync 采用完全对等的双向同步哲学，**绝无“2.0 为主、IDE 为从”的不平等从属关系**：
+- **IDE 主用型开发者**：如果您日常的所有编码、Prompt 交互均在 VS Code 插件端进行，您的最新会话和对话步数会自动无缝反哺至 Antigravity 2.0。
+- **2.0 主用型开发者**：如果您主要在 2.0 桌面端对话，数据同样自动平滑流入 IDE。
+- **严格的多层仲裁原则**：
+  1. **步数多者绝对优先**：当双端会话存在分叉冲突时，优先采用步骤总数更完整的一端（`max(idx)` / `count(*)`）。
+  2. **活跃时间最新者优先**：步数相同时，严格采用最近活跃交互的一端。
+  3. **零数据丢失联邦**：任一端新建的专属会话，自动同步并呈现在另一端。
+
 ---
 
 ## 🚀 快速上手
@@ -107,16 +116,18 @@ cd antigravity-sync
 python antigravity_sync.py --init
 ```
 
-向导将自动按序执行 4 大关键阶段：
-1. **物理存储智能双向融合与软链接建立**：
+向导将自动按序执行 5 大关键阶段：
+1. **生成永久初始化里程碑快照**：
+   在做任何物理变更前，自动将双端数据完整备份至 `~/.gemini/config/backups/PRE_INIT_SNAPSHOT_<timestamp>/`。**该快照享有永久豁免权，绝不会被整点轮转自动清理**。
+2. **物理存储智能双向融合与软链接建立**：
    - 智能比对同名数据库步数（`count(*)`, `max(idx)`）与时间戳：优先保留步数更完整的一端，自动迁移 IDE 专属会话，并在替换 2.0 文件前自动生成 `.pre_merge_20.bak` 备份；
    - 深度合并 `brain/` 目录：自动比对保留最长的 `transcript_full.jsonl` 日志，并无损合并两端所有的任务计划与过程产物；
    - 无损合并 `annotations/` 目录；
    - 自动将原始 IDE 目录备份为 `*_migrated_backup_<timestamp>`；
    - 建立 Windows NTFS 目录联接 (`mklink /J`) 或 POSIX 软链接（**无需管理员权限**）。
-2. **物理孤儿数据库清洗认领**：自动扫描并为所有物理 `.db` 注入 Field 18 `ProjectId`，确保侧边栏正确归属项目。
-3. **历史步骤断层扫描与自愈**：从流式日志中热缝合因崩溃中断的历史步骤，彻底消灭前端无限加载卡死。
-4. **双向元数据增量对齐**：精准同步 2.0 Protobuf、IDE 后台 Protobuf 与 IDE 前端 `state.vscdb`。
+3. **物理孤儿数据库清洗认领**：自动扫描并为所有物理 `.db` 注入 Field 18 `ProjectId`，确保侧边栏正确归属项目。
+4. **历史步骤断层扫描与自愈**：从流式日志中热缝合因崩溃中断的历史步骤，彻底消灭前端无限加载卡死。
+5. **双向元数据增量对齐**：精准同步 2.0 Protobuf、IDE 后台 Protobuf 与 IDE 前端 `state.vscdb`。
 
 无需安装任何外部第三方依赖，全部采用 Python 3.8+ 标准库原生实现。
 
@@ -131,23 +142,88 @@ python antigravity_sync.py --init
 
 | 命令行指令 | 功能描述 |
 | :--- | :--- |
-| `python antigravity_sync.py --init` | **首次使用一键初始化向导**：自动双向融合底层物理存储、清洗孤儿、缝合断层并同步摘要。 |
+| `python antigravity_sync.py --init` | **首次使用一键初始化向导**：生成永久备份快照、双向融合底层物理存储、清洗孤儿、缝合断层并同步摘要。 |
 | `python antigravity_sync.py --sync` | 执行一次双向智能增量同步（数据无变化时不触发写盘） |
 | `python antigravity_sync.py --link` | 一键建立 2.0 与 IDE 共享物理存储目录链接 (Junction / Symlink) |
 | `python antigravity_sync.py --adopt` | 扫描物理 `.db` 会话文件，为孤儿会话精准补齐 ProjectId |
 | `python antigravity_sync.py --check-gaps` | 扫描检测所有会话物理数据库是否存在步数断层 |
 | `python antigravity_sync.py --heal-gaps` | 自动从 `transcript_full.jsonl` 日志中提取记录并热缝合修复断层 |
 | `python antigravity_sync.py --backup` | 立即强制生成一份 2.0 与 IDE 的全局状态快照备份 |
+| `python antigravity_sync.py --restore [merge\|overwrite]` | 从备份快照恢复数据，内置应用占用检测与会话丢失/步数倒退深度预警 |
+| `python antigravity_sync.py --decouple [clone\|revert]` | 解除物理存储共享软链接（“各管各的”实体克隆或彻底还原初始化前） |
 | `python antigravity_sync.py --daemon` | 运行前台轮询守护进程（默认每 60 秒轮询一次） |
 | `python antigravity_sync.py --install-startup` | 一键安装 Windows 开机静默后台守护（通过 VBS + pythonw 无黑框运行） |
 | `python antigravity_sync.py --uninstall-startup` | 一键卸载 Windows 开机静默自启守护 |
 | `python antigravity_sync.py --gemini-home <PATH>` | 手动指定自定义 `.gemini` 用户根目录 |
 | `python antigravity_sync.py --ide-storage <PATH>` | 手动指定自定义 IDE `globalStorage` 目录 |
 
+### 🔄 解除链接与回退（“各管各的” / `--decouple`）
+如果您在后续使用中希望停止共享存储，拆除软链接并恢复各自独立：
+```bash
+# 分支 A (强烈推荐): 解耦独立化 (实体克隆) —— 零数据丢失
+python antigravity_sync.py --decouple clone
+
+# 分支 B: 彻底撤销初始化，恢复到初始前的原始状态
+python antigravity_sync.py --decouple revert
+```
+- **模式 1 (`clone`，默认推荐)**：
+  - 安全拆除 Windows NTFS 目录联接（严禁使用递归删除，严格采用 `rmdir`，**绝不触碰目标源文件**！）；
+  - 将当前融合后的最新数据完整克隆实体文件至 `antigravity-ide/`；
+  - **效果**：2.0 和 IDE 双端均拥有 100% 完整的全部最新会话与历史，之后各自独立读写，互不干扰，零数据丢失。
+- **模式 2 (`revert`)**：
+  - 拆除链接，并将初始化前留存的 `*_migrated_backup_<timestamp>` 还原回 IDE；
+  - 还原 2.0 被融合前备份的 `.pre_merge_20.bak`；
+  - 恢复 `PRE_INIT_SNAPSHOT` 中的初始元数据。
+
+### 🛡️ 带步数防倒退预警的数据恢复（`--restore`）
+恢复旧备份极易导致“新会话静默蒸发”或“会话步数倒退引发断层”。AGY-Sync 部署了 3 重防御：
+```bash
+# 安全合并恢复 (推荐)
+python antigravity_sync.py --restore merge
+
+# 全量镜像覆盖
+python antigravity_sync.py --restore overwrite
+```
+1. **运行中进程占用拦截**：自动探测是否有 `Code.exe` 或 `antigravity.exe` 正在运行，强力拦截并提示退出，杜绝“读后覆写”污染。
+2. **恢复前安全快照**：在覆写前，自动生成 `SAFETY_SNAPSHOT_BEFORE_RESTORE_<timestamp>`，确保有据可查、可随时二次后悔。
+3. **步数与会话差异审计 (Diff Audit)**：自动对比当前活跃会话与备份快照，醒目输出预警：
+   - 标明当前存在但备份中**不存在的会话**（镜像模式下会丢失）；
+   - 标明当前步数大于备份步数的**倒退会话**（例如当前 50 步，备份仅 30 步）。
+4. **双恢复模式**：
+   - **安全合并 (`merge`)**：补全缺失的会话条目，对现有会话严格保留当前更高的步数和最新时间戳；
+   - **镜像覆盖 (`overwrite`)**：完全以快照状态为准覆写。
+
 ### 交互式管理控制台
 不带任何参数运行脚本，即可唤起功能完备的交互式控制台：
 ```bash
 python antigravity_sync.py
+```
+```text
+=================================================================
+   Antigravity 2.0 <-> IDE 原生双向同步与维护中心
+=================================================================
+
+[当前状态统计]
+  • 识别到的项目总数       : 6 个 (已动态加载)
+  • 2.0 原生有效会话总数   : 42 个
+  • 物理存储共享链接       : [已连接 (3/3)]
+  • 开机自启状态           : [已安装]
+
+[功能操作]
+  0. 【首次初始化向导】双端数据无损融合 + 建立存储链接 + 完整同步 (新用户推荐)
+  1. 【原生增量双向同步】自动认领孤儿 + 2.0/IDE 数据精准对齐 (推荐)
+  2. 【从快照恢复数据】带会话丢失与步数倒退深度预警的防错恢复
+  3. 【解除共享存储链接】解除软链接 ('各管各的' / 彻底撤销还原)
+  4. 【双端会话彻底删除】按项目列出会话，多选永久清除 (防死灰复燃)
+  5. 【仅清洗孤儿 DB】为缺少项目绑定的物理文件注入 Project ID
+  6. 【检测步骤断层】扫描物理 steps 表是否有中断丢失
+  7. 【缝合步骤断层】从 transcript_full.jsonl 热修复所有断层
+  8. 【执行一次数据备份】备份当前 pb 和 vscdb (保留最新10份)
+  9. 【配置共享存储链接】自动建立 conversations/brain/annotations 的 Junction
+  10. 【安装开机静默自启】创建后台 60 秒轮询启动项 (无黑框)
+  11. 【卸载开机自启】移除启动项
+  Q. 退出
+=================================================================
 ```
 
 ---
