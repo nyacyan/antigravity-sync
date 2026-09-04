@@ -88,6 +88,11 @@ No external Python dependencies are required — AGY-Sync relies exclusively on 
 
 ## 💻 Usage
 
+> [!IMPORTANT]
+> **Recommended Usage Pattern**:
+> It is **strongly recommended to execute this tool manually while both Antigravity 2.0 and the IDE (VS Code) are completely closed** (e.g., exit applications and run `python antigravity_sync.py --sync`).
+> While the continuous background daemon and Windows startup scripts (`--daemon` / `--install-startup`) are theoretically designed to run automatically in the background, they have **not yet been exhaustively field-tested** across complex concurrent write scenarios. For maximum database safety and consistency, manual execution when both applications are closed is the recommended approach.
+
 ### Command Line Flags
 
 | Option | Description |
@@ -131,7 +136,11 @@ python antigravity_sync.py
 
 ## ⚙️ Background Daemon & Windows Silent Startup
 
-To keep conversations continuously synchronized and automatically heal orphaned sessions without manual intervention:
+> [!CAUTION]
+> **Experimental Feature Notice**:
+> The background daemon and silent startup integration are theoretically functional, but have **not yet undergone exhaustive real-world concurrency testing**. If applications are actively writing while the daemon syncs, unexpected locks could occur. We strongly advise using manual one-shot syncs when applications are closed.
+
+To keep conversations continuously synchronized and automatically heal orphaned sessions:
 
 ```powershell
 # Install Windows Startup (runs silently with pythonw.exe in the background)

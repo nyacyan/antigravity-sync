@@ -1248,7 +1248,10 @@ def run_daemon_loop(interval: int = 60):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Antigravity 2.0 <-> IDE Bi-Directional Synchronization & Session Recovery Manager",
+        description="Antigravity 2.0 <-> IDE Bi-Directional Synchronization & Session Recovery Manager\n\n"
+                    "RECOMMENDED USAGE: Strongly advised to execute manually while both Antigravity 2.0\n"
+                    "and the IDE (VS Code) are completely closed. The automated background daemon is\n"
+                    "theoretically operational, but has not yet been exhaustively tested.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -1257,18 +1260,18 @@ Examples:
   python antigravity_sync.py --check-gaps   Check all conversation databases for step sequence gaps
   python antigravity_sync.py --heal-gaps    Auto-recover and stitch missing steps from streaming logs
   python antigravity_sync.py --backup       Force immediate snapshot backup of summaries and state DB
-  python antigravity_sync.py --daemon       Run background polling loop every 60 seconds
+  python antigravity_sync.py --daemon       Run background polling loop every 60 seconds (Experimental)
   python antigravity_sync.py                Launch interactive management console
 """
     )
 
-    parser.add_argument("--sync", action="store_true", help="Run one-shot incremental bi-directional sync")
+    parser.add_argument("--sync", action="store_true", help="Run one-shot incremental bi-directional sync (Recommended)")
     parser.add_argument("--adopt", action="store_true", help="Scan and adopt orphaned physical .db files")
     parser.add_argument("--check-gaps", action="store_true", help="Check all conversation databases for step gaps")
     parser.add_argument("--heal-gaps", action="store_true", help="Hot-stitch and recover step gaps from logs")
     parser.add_argument("--delete", action="store_true", help="Open interactive session purge console")
     parser.add_argument("--backup", action="store_true", help="Force immediate snapshot backup")
-    parser.add_argument("--daemon", action="store_true", help="Run background daemon loop")
+    parser.add_argument("--daemon", action="store_true", help="Run background daemon loop (EXPERIMENTAL: theoretically operational, but untested)")
     parser.add_argument("--interval", type=int, default=60, help="Daemon polling interval in seconds (default: 60)")
     parser.add_argument("--install-startup", action="store_true", help="Install Windows silent background startup")
     parser.add_argument("--uninstall-startup", action="store_true", help="Uninstall Windows startup daemon")
@@ -1332,9 +1335,11 @@ Examples:
 
     # Interactive Management Console
     while True:
-        print("=" * 65)
+        print("=" * 68)
         print("  Antigravity 2.0 <-> IDE Session Synchronization Console")
-        print("=" * 65)
+        print("  * NOTICE: Recommended to run while 2.0 & IDE are closed.")
+        print("  * Daemon mode is theoretically operational, but untested.")
+        print("=" * 68)
 
         proj_map = load_projects_map()
         conv_cnt = 0
