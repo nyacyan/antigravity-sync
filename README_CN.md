@@ -29,24 +29,24 @@
 
 ```mermaid
 flowchart TD
-    subgraph Antigravity 2.0 桌面端
-        A1[conversations.pb] --> Arbiter
+    subgraph "Antigravity 2.0 桌面端"
+        A1["conversations.pb"] --> Arbiter
     end
 
-    subgraph Antigravity IDE / VS Code
-        B1[globalStorage / conversations.pb] --> Arbiter
-        B2[state.vscdb / SQLite] --> Arbiter
+    subgraph "Antigravity IDE / VS Code"
+        B1["globalStorage / conversations.pb"] --> Arbiter
+        B2["state.vscdb / SQLite"] --> Arbiter
     end
 
-    subgraph 物理会话数据库与日志
-        C1[conversations/{uuid}.db / steps 表]
-        C2[brain/{uuid}/.system_generated/logs/transcript_full.jsonl]
+    subgraph "物理会话数据库与日志"
+        C1["conversations/{uuid}.db (steps 表)"]
+        C2["brain/{uuid}/.system_generated/logs/transcript_full.jsonl"]
     end
 
-    subgraph AGY-Sync 核心引擎
-        Arbiter{智能冲突仲裁器<br/>- 步数多者优先<br/>- 统一规范 c%3A<br/>- ProjectId Field 18}
-        Healer[步骤断层热缝合自愈器]
-        Backup[整点轮转备份管理器]
+    subgraph "AGY-Sync 核心引擎"
+        Arbiter["智能冲突仲裁器<br/>- 步数多者优先<br/>- 统一规范 c%3A<br/>- ProjectId Field 18"]
+        Healer["步骤断层热缝合自愈器"]
+        Backup["整点轮转备份管理器"]
     end
 
     C2 -.->|提取缺失步骤| Healer
@@ -153,6 +153,11 @@ python antigravity_sync.py --uninstall-startup
 3. 提交代码更改 (`git commit -m 'feat: Add NewFeature'`)
 4. 推送至远程分支 (`git push origin feature/NewFeature`)
 5. 创建 Pull Request
+
+---
+
+## 👥 作者与署名 (Author & Attribution)
+本项目从底层逆向工程、Protobuf Wire 协议还原、数据自愈算法到全部代码与文档，完全由 **Antigravity (Google DeepMind)** 独立设计与实现。
 
 ---
 

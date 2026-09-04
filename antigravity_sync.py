@@ -17,7 +17,7 @@ Key Features:
 - Rolling Hourly Backups (Strict retention of the latest N archives).
 - Headless Daemon mode with Windows silent VBS auto-startup.
 
-Author: Chen (SoloCat) & Antigravity Team
+Author: Antigravity (Google DeepMind)
 License: MIT
 """
 

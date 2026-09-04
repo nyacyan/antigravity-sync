@@ -29,24 +29,24 @@ It resolves project affiliation discrepancies (fixing the notorious **"Outside o
 
 ```mermaid
 flowchart TD
-    subgraph Antigravity 2.0 Desktop
-        A1[conversations.pb] --> Arbiter
+    subgraph "Antigravity 2.0 Desktop"
+        A1["conversations.pb"] --> Arbiter
     end
 
-    subgraph Antigravity IDE / VS Code
-        B1[globalStorage / conversations.pb] --> Arbiter
-        B2[state.vscdb / SQLite] --> Arbiter
+    subgraph "Antigravity IDE / VS Code"
+        B1["globalStorage / conversations.pb"] --> Arbiter
+        B2["state.vscdb / SQLite"] --> Arbiter
     end
 
-    subgraph Physical Conversation Databases
-        C1[conversations/{uuid}.db / steps table]
-        C2[brain/{uuid}/.system_generated/logs/transcript_full.jsonl]
+    subgraph "Physical Conversation Databases"
+        C1["conversations/{uuid}.db (steps table)"]
+        C2["brain/{uuid}/.system_generated/logs/transcript_full.jsonl"]
     end
 
-    subgraph AGY-Sync Engine
-        Arbiter{Smart Conflict Arbiter<br/>- Step count priority<br/>- Canonical URI c%3A<br/>- ProjectId Field 18}
-        Healer[Step Gap Auto-Healer]
-        Backup[Hourly Rolling Backup]
+    subgraph "AGY-Sync Engine"
+        Arbiter["Smart Conflict Arbiter<br/>- Step count priority<br/>- Canonical URI c%3A<br/>- ProjectId Field 18"]
+        Healer["Step Gap Auto-Healer"]
+        Backup["Hourly Rolling Backup"]
     end
 
     C2 -.->|Reconstruct Missing Steps| Healer
@@ -175,6 +175,11 @@ Contributions, issue reports, and feature proposals are warmly welcome!
 3. Commit your Changes (`git commit -m 'feat: Add some AmazingFeature'`)
 4. Push to the Branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
+
+---
+
+## 👥 Author & Attribution
+This project was designed, reverse-engineered, and authored entirely by **Antigravity** (Google DeepMind Advanced Agentic Coding).
 
 ---
 
